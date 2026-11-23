@@ -79,7 +79,8 @@ details ul{padding-left:18px;margin:6px 0}
     <li>Joystick gauche/droite : tourner le meuble sélectionné</li>
     <li>A / X : meuble suivant du catalogue</li>
     <li>B / Y : supprimer le meuble sélectionné</li>
-    <li>Clic joystick : afficher/masquer l'encombrement du lit ouvert</li>
+    <li>Clic joystick : déplier / replier le canapé convertible (encombrement du lit pour les autres meubles)</li>
+    <li>Viser le pied du mur : le dos du canapé s'y plaque. Viser le mur lui-même : le meuble s'aligne dessus</li>
   </ul><p>Sur téléphone : touchez l'écran pour poser, boutons en bas pour le reste. En AR, les meubles posés ne sont pas conservés après la sortie.</p></details>
 </aside>
 <div id="view"><div class="hint" id="hint">Glisser : tourner la vue · clic sur un meuble : le choisir · clic au sol : l'y déplacer</div></div>
@@ -115,7 +116,13 @@ const camera=new THREE.PerspectiveCamera(55,1,0.01,100);
 camera.position.set(3.5,3.2,5.5);scene.add(camera);
 const controls=new OrbitControls(camera,renderer.domElement);
 controls.target.set(0,0.4,0);controls.maxPolarAngle=Math.PI/2.05;controls.update();
-scene.add(new THREE.HemisphereLight(0xffffff,0x8a7f72,1.5));
+const hemi=new THREE.HemisphereLight(0xffffff,0x8a7f72,1.5);scene.add(hemi);
+/* reflets : panorama d'un salon, pour le cuir, le laiton et le miroir (le vrai salon n'est pas accessible aux pages web) */
+let envTex=null;const ENV={off:-Math.PI/2,sign:1},mirrorMat=new THREE.MeshBasicMaterial({color:0x9aa0a6});
+new THREE.TextureLoader().load('meubles/env-salon.jpg',t=>{t.mapping=THREE.EquirectangularReflectionMapping;t.colorSpace=THREE.SRGBColorSpace;envTex=t;
+  const pm=new THREE.PMREMGenerator(renderer);scene.environment=pm.fromEquirectangular(t).texture;pm.dispose();hemi.intensity=.9});
+function updMirrors(){for(const o of items.children)for(const m of o.userData.mirrors||[]){
+  if(m.envMap!==envTex){m.envMap=envTex;m.color.set(envTex?0xffffff:0x9aa0a6);m.needsUpdate=true}m.envMapRotation.y=ENV.off+ENV.sign*o.rotation.y}}
 const sun=new THREE.DirectionalLight(0xffffff,1.6);sun.position.set(3,6,2);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);
 Object.assign(sun.shadow.camera,{left:-6,right:6,top:6,bottom:-6});scene.add(sun);
 const world=new THREE.Group();scene.add(world);
@@ -153,6 +160,9 @@ function buildSofa(it){
   for(const sx of[-1,1])for(const sz of[-1,1]){const l=new THREE.Mesh(new THREE.CylinderGeometry(.025,.02,leg,10),dark);l.position.set(sx*(L/2-.06),leg/2,sz*(P/2-.06));l.castShadow=true;g.add(l)}
   return g}
 function fitGlb(src,it){
+  if(it.anchor==='back'){/* modèle à l'échelle 1:1, origine au sol au milieu du dos : ni recentré ni déformé */
+    const w=new THREE.Group();w.add(src.clone(true));w.scale.set(it.L/(it.L0||it.L||1),it.H/(it.H0||it.H||1),it.P/(it.P0||it.P||1));w.position.y=it.y||0;
+    w.traverse(n=>{if(n.isMesh)n.castShadow=n.receiveShadow=true});return w}
   const o=src.clone(true),turn=new THREE.Group(),scaler=new THREE.Group(),w=new THREE.Group();
   if(it.rot90)turn.rotation.y=Math.PI/2;turn.add(o);scaler.add(turn);w.add(scaler);w.updateMatrixWorld(true);
   const s=new THREE.Box3().setFromObject(scaler).getSize(new THREE.Vector3());
@@ -164,27 +174,35 @@ function bedGhost(it){if(!it.bed)return null;
   const me=new THREE.Mesh(new THREE.BoxGeometry(it.L,.4,it.bed),new THREE.MeshStandardMaterial({color:0x3aa0ff,transparent:true,opacity:.25,depthWrite:false}));
   me.position.set(0,.2,-it.P/2+it.bed/2);me.add(new THREE.LineSegments(new THREE.EdgesGeometry(me.geometry),new THREE.LineBasicMaterial({color:0x3aa0ff})));
   me.name='bed';me.visible=false;return me}
-function makeItem(it){if(!it)return null;let body;
-  if(it.kind==='glb'){if(!glbs[it.id])return null;body=fitGlb(glbs[it.id],it)}else body=buildSofa(it);
-  const g=new THREE.Group();g.add(body);const bd=bedGhost(it);if(bd)g.add(bd);g.userData.cid=it.id;return g}
+function makeItem(it,opened){if(!it)return null;let body;const alt=glbs[it.id+':open'];
+  if(it.kind==='glb'){if(!glbs[it.id])return null;body=fitGlb(opened&&alt||glbs[it.id],it)}else body=buildSofa(it);
+  const g=new THREE.Group(),mir=[];body.name='body';g.add(body);
+  body.traverse(n=>{if(n.isMesh&&n.material.name==='MiroirVerre'){n.material=mirrorMat.clone();n.castShadow=false;mir.push(n.material)}});
+  if(!alt){const bd=bedGhost(it);if(bd)g.add(bd)}
+  g.userData.cid=it.id;g.userData.open=!!(opened&&alt);g.userData.mirrors=mir;return g}
 
 /* état, sauvegarde */
 function save(){store.set('salon.cat',catalog);store.set('salon.room',room);
-  if(!inAR)store.set('salon.layout',items.children.map(o=>({cid:o.userData.cid,x:o.position.x,z:o.position.z,r:o.rotation.y,bed:!!o.getObjectByName('bed')?.visible})))}
+  if(!inAR)store.set('salon.layout',items.children.map(o=>({cid:o.userData.cid,x:o.position.x,z:o.position.z,r:o.rotation.y,bed:o.userData.open||!!o.getObjectByName('bed')?.visible})))}
 function select(o){sel=o;selBox.visible=!!o;if(o)selBox.setFromObject(o);
   document.querySelectorAll('#selBtns button').forEach(b=>b.disabled=!o)}
 function rebuild(){const old=items.children.slice();items.clear();
-  for(const o of old){const n=makeItem(catalog.find(c=>c.id===o.userData.cid));if(!n)continue;
+  for(const o of old){const n=makeItem(catalog.find(c=>c.id===o.userData.cid),o.userData.open);if(!n)continue;
     n.position.copy(o.position);n.rotation.y=o.rotation.y;const b=n.getObjectByName('bed');if(b)b.visible=!!o.getObjectByName('bed')?.visible;items.add(n)}
   select(null);save()}
 function rotate(a){if(sel){sel.rotation.y+=a;save()}}
-function toggleBed(){const b=sel?.getObjectByName('bed');if(b){b.visible=!b.visible;save()}}
+function toggleBed(){if(!sel)return;const it=catalog.find(c=>c.id===sel.userData.cid);
+  if(it&&glbs[it.id+':open']){/* convertible : on échange le modèle fermé et le modèle déplié */
+    const n=makeItem(it,!sel.userData.open);n.position.copy(sel.position);n.rotation.y=sel.rotation.y;
+    n.getObjectByName('body').position.y=sel.getObjectByName('body').position.y;
+    items.remove(sel);items.add(n);if(drag===sel)drag=n;select(n);save();return}
+  const b=sel.getObjectByName('bed');if(b){b.visible=!b.visible;save()}}
 function delSel(){if(sel){items.remove(sel);select(null);save()}}
 function nextItem(d){current=(current+d+catalog.length)%catalog.length;renderCat();drawHud()}
 function drawHud(){const c=hudCv.getContext('2d'),it=catalog[current];c.clearRect(0,0,1024,192);
   c.fillStyle='rgba(20,16,12,.75)';c.beginPath();c.roundRect(0,0,1024,192,40);c.fill();
   c.fillStyle='#fff';c.font='700 64px system-ui';c.fillText(it?it.name:'—',40,86);
-  c.fillStyle='#ffcf8a';c.font='36px system-ui';c.fillText(it?`${Math.round(it.L*100)} × ${Math.round(it.P*100)} × ${Math.round(it.H*100)} cm · A suivant · B suppr.`:'',40,150);
+  c.fillStyle='#ffcf8a';c.font='36px system-ui';c.fillText(it?`${Math.round(it.L*100)} × ${Math.round(it.P*100)} × ${Math.round(it.H*100)} cm · A suivant · B suppr.${it.bed?' · clic joystick : lit':''}`:'',40,150);
   hudTex.needsUpdate=true;$('#ovName').textContent=it?it.name:''}
 
 /* catalogue */
@@ -210,6 +228,20 @@ async function addGlb(buf,name,id,dims){const g=await loader.parseAsync(buf,'');
   if(!c){const s=new THREE.Box3().setFromObject(g.scene).getSize(new THREE.Vector3());
     c={id,name,kind:'glb',L:+(dims?.L??s.x).toFixed(2),P:+(dims?.P??s.z).toFixed(2),H:+(dims?.H??s.y).toFixed(2),bed:dims?.bed||0,rot90:false};catalog.push(c)}
   return c}
+/* meubles du dépôt (meubles.json) : « open » = modèle déplié, « parts » = ensemble de plusieurs fichiers,
+   « anchor":"back" = échelle 1:1 avec origine au milieu du dos, « y » = hauteur de pose, « wall » = s'accroche au mur visé */
+const fileScene={};
+async function loadFile(f){if(!fileScene[f]){const r=await fetch('meubles/'+f);if(!r.ok)throw new Error(f+' : '+r.status);
+  fileScene[f]=(await loader.parseAsync(await r.arrayBuffer(),'')).scene}return fileScene[f]}
+async function addFile(m){const id='f:'+(m.file||m.name);
+  if(m.parts){const mk=async op=>{const g=new THREE.Group();for(const p of m.parts){const s=(await loadFile(op&&p.open||p.file)).clone(true);s.position.y=p.y||0;g.add(s)}return g};
+    glbs[id]=await mk(false);if(m.parts.some(p=>p.open))glbs[id+':open']=await mk(true)}
+  else{glbs[id]=await loadFile(m.file);if(m.open)glbs[id+':open']=await loadFile(m.open)}
+  let c=catalog.find(x=>x.id===id);
+  if(!c){const s=new THREE.Box3().setFromObject(glbs[id]).getSize(new THREE.Vector3());
+    c={id,name:m.name||m.file,kind:'glb',L:+(m.L??s.x).toFixed(2),P:+(m.P??s.z).toFixed(2),H:+(m.H??s.y).toFixed(2),bed:m.bed||0,rot90:false};catalog.push(c)}
+  Object.assign(c,{anchor:m.anchor||'',L0:m.L||c.L,P0:m.P||c.P,H0:m.H||c.H,y:m.y||0,wall:!!m.wall});
+  if(m.default)current=catalog.indexOf(c)}
 $('#glbIn').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
   try{const buf=await f.arrayBuffer(),id='g'+Date.now();await addGlb(buf,f.name.replace(/\.(glb|gltf)$/i,''),id);
     idb.put(id,buf).catch(()=>{});current=catalog.length-1;save();renderCat();drawHud();msg('Modèle importé : saisissez ses vraies cotes, il sera redimensionné.')}
@@ -251,9 +283,15 @@ async function startAR(s){
 async function setupSources(){const s=renderer.xr.getSession();if(!s)return;
   const tp=[...s.inputSources].filter(i=>i.targetRayMode==='tracked-pointer');const src=tp.find(i=>i.handedness==='right')||tp[0];
   ctrlSrc?.cancel();ctrlSrc=null;if(src){try{ctrlSrc=await s.requestHitTestSource({space:src.targetRaySpace})}catch{ctrlSrc=null}}}
+/* pose : au sol (face tournée vers soi) ou sur un mur visé (dos plaqué au mur, miroir à la hauteur visée) */
+let floorY=null;const _n=new THREE.Vector3(),_p=new THREE.Vector3(),_c=new THREE.Vector3();
+function hitWall(){_n.setFromMatrixColumn(reticle.matrix,1);_p.setFromMatrixPosition(reticle.matrix);return Math.abs(_n.y)<.5}
+function moveTo(o,face){const it=catalog.find(c=>c.id===o.userData.cid),body=o.getObjectByName('body');renderer.xr.getCamera().getWorldPosition(_c);
+  if(hitWall()){o.rotation.y=Math.atan2(_n.x,_n.z);
+    if(it?.wall){o.position.copy(_p);if(body)body.position.y=0}else o.position.set(_p.x,floorY??_c.y-1.5,_p.z)}
+  else{o.position.copy(_p);if(it?.wall&&body)body.position.y=it.y||0;if(face)o.rotation.y=Math.atan2(_c.x-_p.x,_c.z-_p.z)}}
 function placeAt(it){const o=makeItem(it);if(!o){return}
-  o.position.setFromMatrixPosition(reticle.matrix);const c=new THREE.Vector3();renderer.xr.getCamera().getWorldPosition(c);
-  o.rotation.y=Math.atan2(c.x-o.position.x,c.z-o.position.z);items.add(o);catcher.position.y=o.position.y+.002;select(o)}
+  moveTo(o,true);items.add(o);catcher.position.y=(floorY??o.position.y)+.002;select(o)}
 function grab(){if(!reticle.visible)return;const p=new THREE.Vector3().setFromMatrixPosition(reticle.matrix);let best=null,bd=1.2;
   for(const o of items.children){const d=Math.hypot(o.position.x-p.x,o.position.z-p.z);if(d<bd){bd=d;best=o}}if(best){select(best);drag=best}}
 const prev={};
@@ -270,17 +308,18 @@ function resize(){if(renderer.xr.isPresenting)return;const w=view.clientWidth,h=
 const ro=new ResizeObserver(resize);ro.observe(view);
 renderer.setAnimationLoop((t,frame)=>{
   if(frame){const ref=renderer.xr.getReferenceSpace(),src=ctrlSrc||viewerSrc,hits=src?frame.getHitTestResults(src):[];
-    if(hits.length){reticle.visible=true;reticle.matrix.fromArray(hits[0].getPose(ref).transform.matrix)}else reticle.visible=false;
-    pollPads(frame);if(drag&&reticle.visible)drag.position.setFromMatrixPosition(reticle.matrix)}
-  if(sel)selBox.update();renderer.render(scene,camera)});
+    if(hits.length){reticle.visible=true;reticle.matrix.fromArray(hits[0].getPose(ref).transform.matrix);if(!hitWall()&&_n.y>.5)floorY=_p.y}else reticle.visible=false;
+    pollPads(frame);if(drag&&reticle.visible)moveTo(drag,false)}
+  updMirrors();if(sel)selBox.update();renderer.render(scene,camera)});
 
 /* démarrage */
 async function boot(){drawRoom();
   for(const c of catalog.filter(c=>c.kind==='glb')){try{const buf=await idb.get(c.id);if(buf)await addGlb(buf,c.name,c.id)}catch{}}
-  try{const r=await fetch('meubles/meubles.json');if(r.ok){for(const m of await r.json()){const id='f:'+m.file;if(glbs[id])continue;
-    try{const buf=await (await fetch('meubles/'+m.file)).arrayBuffer();await addGlb(buf,m.name||m.file,id,m)}catch{}}}}catch{}
-  for(const l of layout){const o=makeItem(catalog.find(c=>c.id===l.cid));if(!o)continue;o.position.set(l.x,0,l.z);o.rotation.y=l.r;const b=o.getObjectByName('bed');if(b)b.visible=l.bed;items.add(o)}
+  try{const r=await fetch('meubles/meubles.json',{cache:'no-cache'});if(r.ok){for(const m of await r.json()){
+    try{await addFile(m)}catch(err){console.warn('Meuble ignoré :',m.name||m.file,err.message)}}}}catch{}
+  for(const l of layout){const o=makeItem(catalog.find(c=>c.id===l.cid),l.bed);if(!o)continue;o.position.set(l.x,0,l.z);o.rotation.y=l.r;const b=o.getObjectByName('bed');if(b)b.visible=l.bed;items.add(o)}
   select(null);renderCat();drawHud();resize()}
+window.salonAR={scene,camera,controls,items,ENV,catalog:()=>catalog,select,toggleBed};/* pour les essais depuis la console */
 boot();
 }
 </script>
