@@ -1,0 +1,5 @@
+[
+  {"name": "Ensemble canapé + miroir", "parts": [{"file": "canape-cuir.glb", "open": "canape-cuir-ouvert.glb"}, {"file": "miroir-laiton.glb", "y": 1.45}], "L": 2.00, "P": 0.90, "H": 1.80, "bed": 2.12, "anchor": "back", "default": true},
+  {"name": "Canapé cuir convertible", "file": "canape-cuir.glb", "open": "canape-cuir-ouvert.glb", "L": 2.00, "P": 0.90, "H": 0.85, "bed": 2.12, "anchor": "back"},
+  {"name": "Miroir rond laiton", "file": "miroir-laiton.glb", "L": 0.70, "P": 0.03, "H": 0.70, "bed": 0, "anchor": "back", "y": 1.45, "wall": true}
+]
