@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local technique PV + stockage</title>
+<style>
+  html,body{margin:0;height:100%;background:#d9dbde;font-family:system-ui,Segoe UI,Arial,sans-serif;color:#1c1f24}
+  canvas{display:block}
+  #barre{position:fixed;left:16px;right:16px;bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button{font:600 15px system-ui;padding:12px 18px;border:0;border-radius:10px;background:#16467a;color:#fff;cursor:pointer}
+  button.clair{background:#fff;color:#16467a;border:1px solid #16467a}
+  button:disabled{opacity:.45;cursor:default}
+  #titre{position:fixed;left:16px;top:14px;font-weight:700;font-size:17px}
+  #aide{position:fixed;left:16px;top:40px;font-size:13px;max-width:560px;line-height:1.4;color:#3a4048}
+  #msg{font-size:13px;color:#3a4048}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="titre">Local technique PV + stockage : chantier type</div>
+<div id="aide">Souris : tourner, molette : zoomer. Dans le casque : manette gauche = déplacer l'installation, manette droite = la tourner (gauche/droite) et l'avancer ou la reculer, bouton A ou X = afficher ou masquer le mur et le sol.</div>
+<div id="barre">
+  <button id="bAR">Réalité augmentée</button>
+  <button id="bVR">Réalité virtuelle</button>
+  <button id="bPiece" class="clair">Mur et sol : affichés</button>
+  <span id="msg">Chargement…</span>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+
+const msg = t => document.getElementById('msg').textContent = t;
+const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.NeutralToneMapping; renderer.toneMappingExposure = 1.0;
+renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene(); const FOND = new THREE.Color(0xd9dbde); scene.background = FOND;
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 60);
+camera.position.set(0.5, 1.45, 3.4);
+const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 1.1, 0); controls.update();
+scene.add(new THREE.HemisphereLight(0xffffff, 0xb9b4aa, 1.9));
+const cle = new THREE.DirectionalLight(0xfff4e6, 2.2); cle.position.set(-1.3, 2.7, 2.0); scene.add(cle);
+
+window.__vue = (x, y, z, d = 0.9) => { controls.target.set(x, y, z); camera.position.set(x + d * 0.25, y + d * 0.1, z + d); controls.update(); };   // gros plan de controle
+const root = new THREE.Group(); scene.add(root);          // repere de pose : au sol, contre le mur, au milieu
+let piece = null, pieceVisible = true;
+function montrerPiece(v) {
+  pieceVisible = v; if (piece) piece.visible = v;
+  document.getElementById('bPiece').textContent = 'Mur et sol : ' + (v ? 'affichés' : 'masqués');
+}
+document.getElementById('bPiece').onclick = () => montrerPiece(!pieceVisible);
+
+const charge = g => {
+  let tris = 0;
+  g.scene.traverse(o => {
+    if (!o.isMesh) return;
+    tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+    if (o.name.startsWith('LT_piece') || (o.parent && o.parent.name === 'LT_piece')) piece = o.parent && o.parent.name === 'LT_piece' ? o.parent : o;
+    const m = o.material;
+    if (m.aoMap) m.aoMapIntensity = 1.0;
+    if (m.name === 'Q_etiquettes') { m.transparent = false; m.depthWrite = true; m.alphaTest = 0.5; m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -2; }
+    if (m.name === 'Q_porte_fumee' || m.name === 'Q_porte_etiquette') { m.depthWrite = false; o.renderOrder = 2; }
+    if (m.name === 'M_ecran_onduleur') { m.emissiveIntensity = Math.min(m.emissiveIntensity || 1, 1.2); }
+  });
+  root.add(g.scene);
+  const b = new THREE.Box3().setFromObject(g.scene), s = b.getSize(new THREE.Vector3());
+  msg('Modèle chargé : ' + Math.round(tris).toLocaleString('fr-FR') + ' triangles, emprise ' + s.x.toFixed(2) + ' × ' + s.y.toFixed(2) + ' × ' + s.z.toFixed(2) + ' m');
+  window.__etat = {tris: Math.round(tris), emprise: [s.x, s.y, s.z]};
+};
+const erreur = e => msg('Erreur de chargement du modèle : ' + (e.message || e));
+// Version autonome (modele inclus dans la page, s'ouvre par double-clic) : voir outils/etape4_page_autonome.py
+if (window.GLB_B64) fetch('data:model/gltf-binary;base64,' + window.GLB_B64).then(r => r.arrayBuffer()).then(b => new GLTFLoader().parse(b, '', charge, erreur)).catch(erreur);
+else new GLTFLoader().load('local-technique-pv.glb', charge, undefined, erreur);
+
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ---------------- Casque ----------------
+let mode = null, aPoser = false, boutonAvant = false;
+async function demarrer(type) {
+  if (!navigator.xr) { msg('WebXR indisponible dans ce navigateur (ouvrir la page dans le casque).'); return; }
+  try {
+    const s = await navigator.xr.requestSession(type, {requiredFeatures: ['local-floor']});
+    renderer.xr.setReferenceSpaceType('local-floor'); await renderer.xr.setSession(s);
+    mode = type; aPoser = true;
+    scene.background = type === 'immersive-ar' ? null : FOND; montrerPiece(type !== 'immersive-ar');
+    s.addEventListener('end', () => { mode = null; scene.background = FOND; root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); montrerPiece(true); });
+  } catch (err) { msg('Session refusée : ' + err.message); }
+}
+document.getElementById('bAR').onclick = () => demarrer('immersive-ar');
+document.getElementById('bVR').onclick = () => demarrer('immersive-vr');
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-ar').then(ok => document.getElementById('bAR').disabled = !ok).catch(() => {});
+  navigator.xr.isSessionSupported('immersive-vr').then(ok => document.getElementById('bVR').disabled = !ok).catch(() => {});
+} else { document.getElementById('bAR').disabled = document.getElementById('bVR').disabled = true; }
+
+const v = new THREE.Vector3(), q = new THREE.Quaternion(), e = new THREE.Euler();
+let tPrec = 0;
+renderer.setAnimationLoop((t, frame) => {
+  const dt = Math.min((t - tPrec) / 1000, 0.05); tPrec = t;
+  if (mode && frame) {
+    const cam = renderer.xr.getCamera();
+    if (aPoser && cam.position.lengthSq() > 0) {             // pose initiale : 2 m devant soi, face a soi
+      cam.getWorldDirection(v); v.y = 0; v.normalize();
+      root.position.set(cam.position.x + v.x * 2.0, 0, cam.position.z + v.z * 2.0);
+      root.rotation.y = Math.atan2(-v.x, -v.z); aPoser = false;
+    }
+    let bouton = false;
+    for (const src of renderer.xr.getSession().inputSources) {
+      const gp = src.gamepad; if (!gp || gp.axes.length < 4) continue;
+      const x = Math.abs(gp.axes[2]) > 0.15 ? gp.axes[2] : 0, y = Math.abs(gp.axes[3]) > 0.15 ? gp.axes[3] : 0;
+      cam.getWorldDirection(v); v.y = 0; v.normalize();
+      if (src.handedness === 'left') {                         // deplacer : avant/arriere et lateral, par rapport au regard
+        root.position.x += (-v.x * y - v.z * x) * dt * 0.7; root.position.z += (-v.z * y + v.x * x) * dt * 0.7;
+      } else {                                                 // tourner, avancer/reculer
+        root.rotation.y -= x * dt * 0.9;
+        root.position.x += -v.x * y * dt * 0.7; root.position.z += -v.z * y * dt * 0.7;
+      }
+      if (gp.buttons[4] && gp.buttons[4].pressed) bouton = true;   // A ou X
+    }
+    if (bouton && !boutonAvant) montrerPiece(!pieceVisible);
+    boutonAvant = bouton;
+  }
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
