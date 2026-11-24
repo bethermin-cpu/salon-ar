@@ -29,7 +29,7 @@
 </head>
 <body>
 <header>
-  <h1>Clim Daikin : unités murales et groupe extérieur</h1>
+  <h1>Clim Daikin : unités murales et groupe extérieur <small id="version" style="font-weight:400;opacity:.6"></small></h1>
   <button class="xr" id="btnAR">Réalité augmentée</button>
   <button class="xr" id="btnVR">Réalité virtuelle</button>
 </header>
@@ -44,7 +44,9 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 
+const VERSION='24/11 v3';             // affichée en haut de la page et sur le panneau du casque : vérifier que le casque a bien la dernière version
 const $=s=>document.querySelector(s), msg=t=>{$('#msg').textContent=t};
+$('#version').textContent='· version '+VERSION;
 const vue=$('#vue');
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.xr.enabled=true;
@@ -73,7 +75,7 @@ let ouverture=0;                      // 0 fermé … 1 ouvert (animé)
 
 const chargeur=new GLTFLoader();
 chargeur.setDRACOLoader(new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/'));
-const charge=u=>new Promise((ok,ko)=>chargeur.load(u,g=>ok(g.scene),undefined,ko));
+const charge=u=>new Promise((ok,ko)=>chargeur.load(u+'?v='+encodeURIComponent(VERSION),g=>ok(g.scene),undefined,ko));   // ?v= : pas de vieux modèle en cache
 
 function repere(racine,cles){
   const p={facade:[],volet:[],capot:[],goul:{}};
@@ -131,7 +133,7 @@ function uvFacade(mesh){            // UV planaires (maillage en mm) : u le long
   g.setAttribute('uv',new THREE.BufferAttribute(uv,2));
 }
 async function init(){
-  CAT=await (await fetch('catalogue.json')).json();
+  CAT=await (await fetch('catalogue.json?v='+encodeURIComponent(VERSION),{cache:'no-cache'})).json();
   for(const m of CAT.modeles){
     const s=await charge(m.fichier);s.visible=false;ancreUI.add(s);unites[m.id]=s;
     pieces[m.id]=repere(s,Object.keys(E.goulUI));
@@ -140,7 +142,7 @@ async function init(){
   const g=await charge(CAT.groupe.fichier);ancreGRP.add(g);unites.groupe=g;
   pieces.groupe=repere(g,Object.keys(E.goulGRP));
   g.userData.degag=degagementsGRP(CAT.groupe);g.add(g.userData.degag);
-  apercu();appliquer();construirePanneauHTML();msg('Glisser pour tourner, molette pour zoomer.');
+  apercu();appliquer();construirePanneauHTML();msg('Version '+VERSION+'. Glisser pour tourner, molette pour zoomer.');
 }
 function apercu(){
   monde.position.set(0,0,0);monde.rotation.set(0,0,0);
@@ -233,12 +235,13 @@ function dessinerPanneau(){
   c.fillStyle='#9fb2c6';c.font='26px system-ui,sans-serif';c.textAlign='left';
   c.fillText(modeXR==='ar'?(murVu?'Mur détecté (anneau vert) : gâchette pour poser dessus.':'Pas de mur détecté : la gâchette pose à 1,5 m devant la manette.'):'Poignée : rappeler ce panneau devant soi.',36,1322);
   if(modeXR==='ar')c.fillText('Poignée : rappeler ce panneau. '+etatAR,36,1364);
+  c.font='20px system-ui,sans-serif';c.fillStyle='#6f8193';c.fillText('Version '+VERSION+(diagXR?' · '+diagXR:''),36,1390);
   tex.needsUpdate=true;
 }
 function rafraichirUI(){if(!CAT)return;if(renderer.xr.isPresenting)dessinerPanneau();else construirePanneauHTML()}
 
 // ---- XR
-let modeXR=null, sourceHit=null, reticule, manettes=[], murVu=false, etatAR='';
+let modeXR=null, sourceHit=null, reticule, manettes=[], murVu=false, etatAR='', diagXR='';
 function poserDevantSoi(){            // AR : les deux objets apparaissent tout de suite, à 1,6 m devant soi, avant toute pose sur un mur
   const cam=renderer.xr.getCamera(), p=new THREE.Vector3(), d=new THREE.Vector3();
   cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;if(d.lengthSq()<1e-6)d.set(0,0,-1);d.normalize();
@@ -302,6 +305,8 @@ function placerVR(){
   rafraichirUI();
 }
 async function demarrer(mode){
+  if(!CAT){msg('Modèles encore en chargement : réessayer dans quelques secondes.');return}
+  if(renderer.xr.isPresenting)return;
   if(!navigator.xr){msg('WebXR indisponible dans ce navigateur (ouvrir la page en HTTPS dans le navigateur du Quest).');return}
   if(mode==='ar'&&!(await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false))){msg('Réalité augmentée non proposée par ce navigateur (il faut le navigateur du Quest, page en HTTPS).');return}
   let session;
@@ -311,6 +316,8 @@ async function demarrer(mode){
     catch(e1){session=await navigator.xr.requestSession(type,{optionalFeatures:['local-floor']})}
   }catch(e){msg('Session '+mode.toUpperCase()+' refusée : '+e.message);return}
   modeXR=mode;
+  diagXR=`${session.environmentBlendMode||'?'} · ${(session.enabledFeatures||[]).join(', ')||'fonctions ?'}`;
+  if(mode==='ar'&&session.environmentBlendMode==='opaque')etatAR='(passthrough refusé par le casque)';
   try{renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session)}
   catch(e){try{renderer.xr.setReferenceSpaceType('local');await renderer.xr.setSession(session)}catch(e2){msg('Démarrage '+mode.toUpperCase()+' impossible : '+e2.message);modeXR=null;session.end();return}}
   murApercu.visible=false;
