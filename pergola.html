@@ -61,9 +61,12 @@ ol{padding-left:18px;margin:6px 0;font-size:13.5px}
     <li>Visez vers le poteau avant droit (5 m plus loin, ou juste la direction) : gâchette.</li>
     <li>Joystick droit : glisser · joystick gauche : tourner, monter, descendre.</li>
   </ol>
-  <p class="sub">Manette droite : A recommencer · B inverser la pente. Manette gauche : X changer de côté · Y tourner le soleil.</p>
+  <p class="sub">Manette droite : A recommencer · B inverser la pente. Manette gauche : X changer de côté · Y tourner le soleil. En AR comme en VR, un clic sur un joystick enlève ou remet les panneaux.</p>
+  <h2>Vol libre (VR)</h2>
+  <p class="sub">Joystick gauche : avancer, reculer, aller de côté · joystick droit : haut/bas pour monter ou descendre, gauche/droite pour pivoter · gâchette droite : voler là où pointe la manette · poignée : trois fois plus vite. A ramène au point de départ.</p>
   <h2>Options</h2>
   <label><input type="checkbox" id="optHigh" checked> Côté haut à l'avant</label>
+  <label><input type="checkbox" id="optPan" checked> Panneaux solaires</label>
   <label><input type="checkbox" id="optGround" checked> Sol (aperçu)</label>
   <label>Soleil, direction <input type="range" id="sunAz" min="0" max="360" value="210"></label>
   <label>Soleil, hauteur <input type="range" id="sunEl" min="10" max="80" value="45"></label>
@@ -73,7 +76,7 @@ ol{padding-left:18px;margin:6px 0;font-size:13.5px}
 </aside>
 <div id="stage"></div>
 </div>
-<div id="overlay"><div id="ovTxt"></div><button data-o="reset">Recommencer</button><button data-o="l">⟲ 1°</button><button data-o="r">⟳ 1°</button><button data-o="slope">Pente</button><button data-o="flip">Côté</button><button data-o="sun">Soleil</button><button data-o="quit">Quitter</button></div>
+<div id="overlay"><div id="ovTxt"></div><button data-o="reset">Recommencer</button><button data-o="l">⟲ 1°</button><button data-o="r">⟳ 1°</button><button data-o="slope">Pente</button><button data-o="flip">Côté</button><button data-o="sun">Soleil</button><button data-o="pan">Panneaux</button><button data-o="quit">Quitter</button></div>
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
@@ -104,18 +107,22 @@ scene.add(new THREE.HemisphereLight(0xdbe8ff,0x8a8f80,.35));
 const sun=new THREE.DirectionalLight(0xfff4e0,3.2);sun.castShadow=true;
 const SM=Math.min(4096,renderer.capabilities.maxTextureSize);sun.shadow.mapSize.set(SM,SM);
 Object.assign(sun.shadow.camera,{left:-6.5,right:6.5,top:6.5,bottom:-6.5,near:.1,far:40});sun.shadow.bias=-.0005;sun.shadow.normalBias=.012;scene.add(sun,sun.target);
-const ground=new THREE.Mesh(new THREE.PlaneGeometry(60,60),new THREE.MeshStandardMaterial({color:0xb4b2a8,roughness:1,metalness:0}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(400,400),new THREE.MeshStandardMaterial({color:0xb4b2a8,roughness:1,metalness:0}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
 const catcher=new THREE.Mesh(new THREE.PlaneGeometry(16,16),new THREE.ShadowMaterial({opacity:.42}));catcher.rotation.x=-Math.PI/2;catcher.receiveShadow=true;catcher.visible=false;scene.add(catcher);
 
 /* modèle : root = repère de pose (origine au pied du poteau avant gauche, X vers le poteau avant droit) ;
    model = le GLB, dont l'origine est au sol, au centre des 4 poteaux, côté haut vers -Z */
 const root=new THREE.Group(),model=new THREE.Group();root.add(model);scene.add(root);
-let highFront=true,flip=false,loaded=false;
+let highFront=true,flip=false,loaded=false,showPan=true;const panneaux=[];
+/* avec ou sans panneaux : la structure seule, ou la pergola complète (aperçu, AR et VR) */
+function setPan(v){showPan=v;for(const o of panneaux)o.visible=v;document.querySelector('#optPan').checked=v;renderer.shadowMap.needsUpdate=true}
 function layout(){model.position.set(P.W/2,0,(flip?1:-1)*P.D/2);model.rotation.y=(highFront!==flip)?Math.PI:0}
 layout();
 new GLTFLoader().load(GLB,g=>{
   const ombres=[];
   g.scene.traverse(o=>{if(!o.isMesh)return;o.castShadow=o.receiveShadow=true;const m=o.material;
+    /* tout ce qui part avec les panneaux (cellules, cadres, brides, joints, câbles) : matériaux « …_pan » du GLB */
+    if(m.name==='Q_cellules'||m.name.endsWith('_pan'))panneaux.push(o);
     if(m.name==='Q_cellules'){/* interstices transparents : l'image du jardin passe. L'ombre est portée par un double invisible,
       découpé plus large, pour garder le quadrillage de lumière au sol */
       m.transparent=true;m.depthWrite=true;m.alphaTest=0;m.side=THREE.DoubleSide;m.roughness=.2;o.castShadow=o.receiveShadow=false;
@@ -123,8 +130,8 @@ new GLTFLoader().load(GLB,g=>{
       d.name='ombre_cellules';d.castShadow=true;ombres.push([o,d]);
       if(m.map){m.map.anisotropy=renderer.capabilities.getMaxAnisotropy();m.map.needsUpdate=true}m.needsUpdate=true}
     else if(m.aoMap)m.aoMapIntensity=.85});
-  for(const [o,d] of ombres){d.position.copy(o.position);d.quaternion.copy(o.quaternion);d.scale.copy(o.scale);o.parent.add(d)}
-  model.add(g.scene);loaded=true;msg('');window.pergolaAR.loaded=true;placeSun()},
+  for(const [o,d] of ombres){d.position.copy(o.position);d.quaternion.copy(o.quaternion);d.scale.copy(o.scale);o.parent.add(d);panneaux.push(d)}
+  model.add(g.scene);loaded=true;setPan(showPan);msg('');window.pergolaAR.loaded=true;placeSun()},
   e=>{if(e.total)msg('Chargement du modèle… '+Math.round(100*e.loaded/e.total)+' %')},
   err=>{msg('Le modèle 3D ne se charge pas ('+GLB+'). Vérifiez la connexion puis rechargez la page.');console.error(err)});
 
@@ -134,6 +141,7 @@ function placeSun(){const c=center(),az=+$('#sunAz').value*Math.PI/180,el=+$('#s
   catcher.position.set(c.x,c.y+.003,c.z);renderer.shadowMap.needsUpdate=true}
 $('#sunAz').oninput=$('#sunEl').oninput=placeSun;
 $('#optGround').onchange=e=>{ground.visible=e.target.checked};
+$('#optPan').onchange=e=>setPan(e.target.checked);
 $('#optHigh').onchange=e=>{highFront=e.target.checked;layout();placeSun()};
 const VIEWS={iso:[[8.6,4.6,4.8],[2.5,1.4,-1.8]],under:[[2.2,.9,-.5],[2.9,2.9,-2.5]],side:[[11.5,1.8,-1.8],[2.5,1.6,-1.8]],top:[[2.5,13,-1.75],[2.5,0,-1.8]]};
 function go(k){camera.position.fromArray(VIEWS[k][0]);controls.target.fromArray(VIEWS[k][1]);controls.update()}
@@ -144,24 +152,27 @@ let mode='',phase=0,viewerSrc=null,ctrlSrc=null,floorRef=true;const A=new THREE.
 const reticle=new THREE.Mesh(new THREE.RingGeometry(.08,.11,32).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:0xffffff}));reticle.visible=false;scene.add(reticle);
 const markA=new THREE.Mesh(new THREE.CylinderGeometry(.06,.06,.4,16),new THREE.MeshBasicMaterial({color:0x2ecc71}));markA.visible=false;scene.add(markA);
 const guide=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(1,0,0)]),new THREE.LineBasicMaterial({color:0x2ecc71}));guide.visible=false;guide.frustumCulled=false;scene.add(guide);
-const hudCv=document.createElement('canvas');hudCv.width=1024;hudCv.height=192;const hudTex=new THREE.CanvasTexture(hudCv);hudTex.colorSpace=THREE.SRGBColorSpace;
-const hud=new THREE.Mesh(new THREE.PlaneGeometry(.42,.079),new THREE.MeshBasicMaterial({map:hudTex,transparent:true,depthTest:false}));hud.position.set(0,-.2,-.65);hud.renderOrder=10;hud.visible=false;camera.add(hud);
+const hudCv=document.createElement('canvas');hudCv.width=1024;hudCv.height=256;const hudTex=new THREE.CanvasTexture(hudCv);hudTex.colorSpace=THREE.SRGBColorSpace;
+const hud=new THREE.Mesh(new THREE.PlaneGeometry(.42,.105),new THREE.MeshBasicMaterial({map:hudTex,transparent:true,depthTest:false}));hud.position.set(0,-.2,-.65);hud.renderOrder=10;hud.visible=false;camera.add(hud);
 const TXT=['1. Visez le pied du poteau avant gauche, gâchette','2. Visez vers le poteau avant droit, gâchette','Posée · joystick droit : glisser · gauche : tourner'];
-function drawHud(){const c=hudCv.getContext('2d');c.clearRect(0,0,1024,192);c.fillStyle='rgba(15,20,25,.78)';c.beginPath();c.roundRect(0,0,1024,192,40);c.fill();
-  c.fillStyle='#fff';c.font='600 46px system-ui';c.fillText(mode==='vr'?'Joystick droit : glisser · gauche : tourner':TXT[phase],36,82);c.fillStyle='#9be3b8';c.font='34px system-ui';
-  c.fillText((mode==='vr'?'A recentrer':'A recommencer')+' · B pente · X côté · Y soleil',36,150);hudTex.needsUpdate=true;
+function drawHud(){const c=hudCv.getContext('2d'),W=952;c.clearRect(0,0,1024,256);c.fillStyle='rgba(15,20,25,.78)';c.beginPath();c.roundRect(0,0,1024,256,40);c.fill();
+  c.fillStyle='#fff';c.font='600 44px system-ui';
+  if(mode==='vr'){c.fillText('Joystick gauche : avancer · droit : monter, pivoter',36,74,W);c.font='36px system-ui';c.fillText('Gâchette droite : voler vers la manette · poignée : vite',36,140,W)}
+  else c.fillText(TXT[phase],36,90,W);
+  c.fillStyle='#9be3b8';c.font='34px system-ui';
+  c.fillText((mode==='vr'?'A départ':'A recommencer')+' · B pente · X côté · Y soleil · clic joystick : panneaux',36,mode==='vr'?208:170,W);hudTex.needsUpdate=true;
   $('#ovTxt').textContent=TXT[phase].replace('gâchette','touchez').replace('joystick droit : glisser · gauche : tourner','⟲ ⟳ pour ajuster')}
 function orient(){root.rotation.y=Math.atan2(-dir.z,dir.x);layout();placeSun()}
 function frontVR(){/* VR : la pergola est posée devant soi, à 3 m */
   const p=new THREE.Vector3().setFromMatrixPosition(_view),f=new THREE.Vector3(0,0,-1).transformDirection(_view);f.y=0;
   if(f.lengthSq()<.01)f.set(0,0,-1);f.normalize();dir.copy(f).cross(up).normalize();
   root.position.copy(p).addScaledVector(f,3).addScaledVector(dir,-P.W/2);root.position.y=0;flip=false;orient();root.visible=true;phase=2}
-function reset(){if(mode==='vr'){frontVR();drawHud();return}phase=0;root.visible=false;markA.visible=guide.visible=false;drawHud()}
+function reset(){if(mode==='vr'){rig.identity();applyRig();pendingVR=true;return}phase=0;root.visible=false;markA.visible=guide.visible=false;drawHud()}
 function onSelect(){if(mode!=='ar'||!reticle.visible)return;const p=reticle.position.clone();
   if(phase===0){A.copy(p);markA.position.copy(p).y+=.2;markA.visible=guide.visible=true;phase=1}
   else if(phase===1){const d=p.sub(A);d.y=0;if(d.length()<.3)return;dir.copy(d.normalize());root.position.copy(A);orient();root.visible=true;markA.visible=guide.visible=false;phase=2}
   drawHud()}
-function act(o){if(o==='reset')reset();else if(o==='slope'){highFront=!highFront;$('#optHigh').checked=highFront;layout();placeSun()}
+function act(o){if(o==='reset')reset();else if(o==='pan')setPan(!showPan);else if(o==='slope'){highFront=!highFront;$('#optHigh').checked=highFront;layout();placeSun()}
   else if(o==='flip'){flip=!flip;layout();placeSun()}else if(o==='sun'){const s=$('#sunAz');s.value=(+s.value+30)%360;placeSun()}
   else if(o==='l'||o==='r'){if(phase===2){dir.applyAxisAngle(up,(o==='l'?1:-1)*Math.PI/180);orient()}}else if(o==='quit')renderer.xr.getSession()?.end()}
 const overlay=$('#overlay');overlay.addEventListener('beforexrselect',e=>e.preventDefault());overlay.addEventListener('click',e=>{const o=e.target.dataset.o;if(o)act(o)});
@@ -179,6 +190,7 @@ let pendingVR=false;
 async function startXR(s,m){mode=m;controls.enabled=false;const ar=m==='ar';
   ground.visible=!ar;catcher.visible=ar;scene.background=ar?null:sky;
   renderer.xr.setReferenceSpaceType(floorRef?'local-floor':'local');await renderer.xr.setSession(s);
+  baseRef=renderer.xr.getReferenceSpace();rig.identity();snapArmed=true;
   hud.visible=!s.domOverlayState;if(ar)overlay.classList.add('show');
   s.addEventListener('end',endXR);s.addEventListener('select',onSelect);
   if(ar){reset();
@@ -187,13 +199,35 @@ async function startXR(s,m){mode=m;controls.enabled=false;const ar=m==='ar';
   else{root.visible=false;pendingVR=true;drawHud()}}
 async function setupSources(){const s=renderer.xr.getSession();if(!s||mode!=='ar')return;const tp=[...s.inputSources].filter(i=>i.targetRayMode==='tracked-pointer');const src=tp.find(i=>i.handedness==='right')||tp[0];
   ctrlSrc?.cancel();ctrlSrc=null;if(src){try{ctrlSrc=await s.requestHitTestSource({space:src.targetRaySpace})}catch{ctrlSrc=null}}}
-function endXR(){mode='';pendingVR=false;try{viewerSrc?.cancel();ctrlSrc?.cancel()}catch{}viewerSrc=ctrlSrc=null;reticle.visible=markA.visible=guide.visible=hud.visible=false;overlay.classList.remove('show');
+function endXR(){mode='';pendingVR=false;baseRef=null;rig.identity();try{viewerSrc?.cancel();ctrlSrc?.cancel()}catch{}viewerSrc=ctrlSrc=null;reticle.visible=markA.visible=guide.visible=hud.visible=false;overlay.classList.remove('show');
   flip=false;phase=0;dir.set(1,0,0);root.position.set(0,0,0);root.rotation.set(0,0,0);root.visible=true;catcher.visible=false;ground.visible=$('#optGround').checked;scene.background=sky;controls.enabled=true;layout();placeSun();resize()}
+/* VR : vol libre façon Google Earth. On déplace le visiteur, pas la pergola : rig = repère de la scène ← repère du casque,
+   appliqué par un espace de référence décalé (origine = rig⁻¹) */
+let baseRef=null,snapArmed=true;const rig=new THREE.Matrix4(),_r=new THREE.Matrix4(),_p=new THREE.Vector3(),_q=new THREE.Quaternion(),_s=new THREE.Vector3();
+function applyRig(){if(!baseRef)return;_r.copy(rig).invert().decompose(_p,_q,_s);
+  renderer.xr.setReferenceSpace(baseRef.getOffsetReferenceSpace(new XRRigidTransform({x:_p.x,y:_p.y,z:_p.z},{x:_q.x,y:_q.y,z:_q.z,w:_q.w})))}
+const _h=new THREE.Vector3(),_f=new THREE.Vector3(),_rt=new THREE.Vector3(),_mv=new THREE.Vector3();
+function fly(frame,ref,dt){let moved=false,fast=false,turn=0;_mv.set(0,0,0);
+  _h.setFromMatrixPosition(_view);_f.set(0,0,-1).transformDirection(_view);_f.y=0;if(_f.lengthSq()<1e-4)_f.set(0,0,-1);_f.normalize();_rt.copy(_f).cross(up);
+  const sp=Math.max(1.5,.6*_h.y);
+  for(const src of frame.session.inputSources){const gp=src.gamepad;if(!gp)continue;
+    const ax=Math.abs(gp.axes[2]||0)>.15?gp.axes[2]:0,ay=Math.abs(gp.axes[3]||0)>.15?gp.axes[3]:0;
+    if(gp.buttons[1]?.pressed)fast=true;
+    if(src.handedness==='left'){_mv.addScaledVector(_f,-ay).addScaledVector(_rt,ax)}
+    else{_mv.y-=ay;
+      if(snapArmed&&Math.abs(ax)>.7){turn=ax>0?-1:1;snapArmed=false}else if(Math.abs(ax)<.3)snapArmed=true;
+      if(gp.buttons[0]?.pressed){const ps=frame.getPose(src.targetRaySpace,ref);if(ps){_m.fromArray(ps.transform.matrix);_mv.add(_d.set(0,0,-1).transformDirection(_m))}}}}
+  if(_mv.lengthSq()>0){_mv.multiplyScalar(sp*(fast?3:1)*dt);
+    if(_mv.y<0)_mv.y=Math.max(_mv.y,Math.min(0,.3-_h.y));   // la tête reste à 30 cm au-dessus du sol
+    rig.premultiply(_r.makeTranslation(_mv.x,_mv.y,_mv.z));moved=true}
+  if(turn){const a=turn*Math.PI/6;rig.premultiply(_r.makeTranslation(-_h.x,0,-_h.z)).premultiply(_r.makeRotationY(a)).premultiply(_r.makeTranslation(_h.x,0,_h.z));moved=true}
+  if(moved)applyRig()}
 const prev={};
 function pads(frame){for(const src of frame.session.inputSources){const gp=src.gamepad;if(!gp)continue;const h=src.handedness,b=gp.buttons.map(x=>x.pressed),p=prev[h]||[];
+  if(b[3]&&!p[3])act('pan');   // clic sur l'un des deux joysticks : avec ou sans panneaux
   if(h==='right'){if(b[4]&&!p[4])act('reset');if(b[5]&&!p[5])act('slope')}else{if(b[4]&&!p[4])act('flip');if(b[5]&&!p[5])act('sun')}
   const ax=gp.axes[2]||0,ay=gp.axes[3]||0;
-  if(phase===2){if(h==='right'){const toward=dir.clone().cross(up);if(Math.abs(ax)>.2)root.position.addScaledVector(dir,ax*.004);if(Math.abs(ay)>.2)root.position.addScaledVector(toward,ay*.004);if(Math.abs(ax)>.2||Math.abs(ay)>.2)placeSun()}
+  if(phase===2&&mode==='ar'){if(h==='right'){const toward=dir.clone().cross(up);if(Math.abs(ax)>.2)root.position.addScaledVector(dir,ax*.004);if(Math.abs(ay)>.2)root.position.addScaledVector(toward,ay*.004);if(Math.abs(ax)>.2||Math.abs(ay)>.2)placeSun()}
     else{if(Math.abs(ax)>.3){dir.applyAxisAngle(up,-ax*.003);orient()}else if(Math.abs(ay)>.5&&mode==='ar'){root.position.y-=ay*.002;placeSun()}}}
   prev[h]=b}}
 /* viseur : test de collision du casque s'il répond, sinon intersection du rayon de la manette avec le sol */
@@ -209,17 +243,18 @@ function aim(frame,ref){const src=ctrlSrc||viewerSrc,hits=src?frame.getHitTestRe
 /* boucle */
 function resize(){if(renderer.xr.isPresenting)return;const w=stage.clientWidth,h=stage.clientHeight;if(!w||!h)return;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
 const ro=new ResizeObserver(resize);ro.observe(stage);resize();
-renderer.setAnimationLoop((t,frame)=>{
+let tPrev=0;
+renderer.setAnimationLoop((t,frame)=>{const dt=Math.min((t-tPrev)/1000,.05);tPrev=t;
   if(frame&&mode){const ref=renderer.xr.getReferenceSpace();
     if(mode==='ar'){reticle.visible=phase<2&&aim(frame,ref);
       if(phase===1&&reticle.visible){const pos=guide.geometry.attributes.position,r=reticle.position;pos.setXYZ(0,A.x,A.y,A.z);pos.setXYZ(1,r.x,r.y,r.z);pos.needsUpdate=true}}
-    else{const vp=frame.getViewerPose(ref);if(vp){_view.fromArray(vp.transform.matrix);if(pendingVR){pendingVR=false;frontVR();drawHud()}}}
+    else{const vp=frame.getViewerPose(ref);if(vp){_view.fromArray(vp.transform.matrix);if(pendingVR){pendingVR=false;frontVR();drawHud()}else if(dt>0)fly(frame,ref,dt)}}
     pads(frame)}
   else controls.update();
   renderer.render(scene,camera)});
 drawHud();
 /* pour les essais en console */
-window.pergolaAR={THREE,scene,root,model,renderer,camera,sun,act,go,loaded:false};
+window.pergolaAR={THREE,scene,root,model,renderer,camera,sun,act,go,rig,fly,view:_view,loaded:false};
 }
 </script>
 </body>
