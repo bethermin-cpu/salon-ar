@@ -44,7 +44,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 
-const VERSION='24/11 v3';             // affichée en haut de la page et sur le panneau du casque : vérifier que le casque a bien la dernière version
+const VERSION='24/11 v4';             // affichée en haut de la page et sur le panneau du casque : vérifier que le casque a bien la dernière version
 const $=s=>document.querySelector(s), msg=t=>{$('#msg').textContent=t};
 $('#version').textContent='· version '+VERSION;
 const vue=$('#vue');
@@ -287,13 +287,20 @@ for(let i=0;i<2;i++){
   c.addEventListener('select',()=>surSelection(c));c.addEventListener('squeeze',rappelerPanneau);
   scene.add(c);manettes.push(c);
 }
+let jetonHit=0;
 async function sourceDeHit(session){
+  // Panne v3 (Quest 3, chargement sans fin) : l'ancienne source était annulée AVANT d'avoir la nouvelle ;
+  // l'image suivante appelait getHitTestResults() sur une source annulée, l'exception arrêtait la boucle de rendu.
+  const jeton=++jetonHit, ancienne=sourceHit;sourceHit=null;
+  try{ancienne?.cancel?.()}catch(e){}
   try{
     const s=[...session.inputSources].filter(s=>s.targetRayMode==='tracked-pointer');
     const src=s.find(s=>s.handedness==='right')||s[0];
     const space=src?src.targetRaySpace:await session.requestReferenceSpace('viewer');
-    sourceHit?.cancel?.();sourceHit=await session.requestHitTestSource({space});etatAR='';
-  }catch(e){sourceHit=null;etatAR='(détection des murs indisponible)'}
+    const nouvelle=await session.requestHitTestSource({space});
+    if(jeton!==jetonHit||modeXR!=='ar'){nouvelle.cancel?.();return}   // un appel plus récent a pris la main
+    sourceHit=nouvelle;etatAR='';
+  }catch(e){if(jeton===jetonHit){sourceHit=null;etatAR='(détection des murs indisponible)'}}
   if(renderer.xr.isPresenting)dessinerPanneau();
 }
 function placerVR(){
@@ -336,9 +343,10 @@ $('#btnAR').onclick=()=>demarrer('ar');$('#btnVR').onclick=()=>demarrer('vr');
 
 function dimensionner(){if(renderer.xr.isPresenting)return;const w=vue.clientWidth,h=vue.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}
 new ResizeObserver(dimensionner).observe(vue);dimensionner();
-const horloge=new THREE.Clock();
+const horloge=new THREE.Clock();let erreurBoucle='';
 renderer.setAnimationLoop((t,frame)=>{
   const dt=horloge.getDelta();
+  try{                                 // une exception ici arrêterait la boucle de three.js : le casque resterait sur les trois points
   if(CAT)animerCapots(dt);
   if(frame&&modeXR==='ar'&&sourceHit){
     const ref=renderer.xr.getReferenceSpace();dernierHit=null;
@@ -353,6 +361,9 @@ renderer.setAnimationLoop((t,frame)=>{
     }
     reticule.visible=!!dernierHit;
     if(murVu!==!!dernierHit){murVu=!!dernierHit;dessinerPanneau()}
+  }
+  }catch(e){
+    if(!erreurBoucle){erreurBoucle=e.name+' : '+e.message;diagXR=(diagXR?diagXR+' · ':'')+'erreur '+erreurBoucle;console.error(e);if(renderer.xr.isPresenting)dessinerPanneau()}
   }
   renderer.render(scene,camera);
 });
