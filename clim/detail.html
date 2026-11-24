@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clim Daikin : vue détaillée AR / VR</title>
+<style>
+  :root{--fond:#f3f4f6;--carte:#fff;--texte:#1c2530;--doux:#5d6b7a;--accent:#0072bc;--bord:#d5dbe2}
+  @media (prefers-color-scheme:dark){:root{--fond:#12161b;--carte:#1b2129;--texte:#e8edf2;--doux:#9aa7b5;--accent:#4aa8e8;--bord:#2e3742}}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--fond);color:var(--texte);display:flex;flex-direction:column;height:100dvh}
+  header{padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--bord)}
+  h1{font-size:17px;margin:0 auto 0 0}
+  main{flex:1;display:flex;min-height:0}
+  #vue{flex:1;min-width:0;position:relative}
+  canvas{display:block}
+  aside{width:330px;max-width:100%;overflow:auto;padding:12px 16px;background:var(--carte);border-left:1px solid var(--bord)}
+  @media (max-width:760px){main{flex-direction:column}aside{width:auto;border-left:0;border-top:1px solid var(--bord);max-height:48dvh}}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--doux);margin:14px 0 6px}
+  .rangee{display:flex;flex-wrap:wrap;gap:6px}
+  button{font:inherit;padding:8px 11px;border-radius:8px;border:1px solid var(--bord);background:var(--fond);color:var(--texte);cursor:pointer}
+  button.actif{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.xr{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.45;cursor:default}
+  #info{font-size:13px;color:var(--doux);margin:8px 0 0;line-height:1.45}
+  #msg{position:absolute;left:12px;bottom:10px;font-size:13px;color:var(--doux);background:var(--carte);padding:4px 8px;border-radius:6px}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<header>
+  <h1>Clim Daikin : vue détaillée, intérieur et fonctionnement <small id="version" style="font-weight:400;opacity:.6"></small></h1>
+  <a href="./" style="color:var(--accent);font-size:14px">Version simple</a>
+  <button class="xr" id="btnAR">Réalité augmentée</button>
+  <button class="xr" id="btnVR">Réalité virtuelle</button>
+</header>
+<main>
+  <div id="vue"><div id="msg">Chargement…</div></div>
+  <aside id="panneau"></aside>
+</main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+
+const VERSION='24/11 D1';             // affichée en haut de la page et sur le panneau du casque : vérifier que le casque a bien la dernière version
+const $=s=>document.querySelector(s), msg=t=>{$('#msg').textContent=t};
+$('#version').textContent='· version '+VERSION;
+const vue=$('#vue');
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.xr.enabled=true;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.0;
+vue.appendChild(renderer.domElement);
+const scene=new THREE.Scene(), CIEL=new THREE.Color(0xdfe7ef);
+scene.background=CIEL;
+scene.environment=new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(),0.04).texture;
+scene.environmentIntensity=0.55;
+scene.add(new THREE.HemisphereLight(0xffffff,0x8a8f96,0.35));
+const soleil=new THREE.DirectionalLight(0xfff4e2,1.6);scene.add(soleil,soleil.target);
+// ombre portée en direct (le Quest 3 tient 90 images/s avec une carte d'ombre de 4 096 px sur la pergola)
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+soleil.castShadow=true;soleil.shadow.mapSize.set(2048,2048);soleil.shadow.bias=-0.0004;soleil.shadow.normalBias=0.012;
+Object.assign(soleil.shadow.camera,{left:-3.2,right:3.2,top:3.2,bottom:-3.2,near:.5,far:16});
+function viserSoleil(x,y,z){soleil.target.position.set(x,y,z);soleil.position.set(x-2.2,y+4.2,z+3.4)}
+viserSoleil(.7,1.4,0);
+const ombres=(racine,porte)=>racine.traverse(o=>{if(o.isMesh){o.castShadow=porte;o.receiveShadow=true}});
+const camera=new THREE.PerspectiveCamera(45,1,0.05,100);camera.position.set(-0.6,1.9,5.4);
+const orbite=new OrbitControls(camera,renderer.domElement);orbite.target.set(0.7,1.6,0);orbite.update();
+
+// ---- contenu : tout est dans « monde » ; les deux ancres se posent contre un mur (axe Z = normale du mur)
+const monde=new THREE.Group();scene.add(monde);
+const ancreUI=new THREE.Group(), ancreGRP=new THREE.Group();monde.add(ancreUI,ancreGRP);
+const murApercu=new THREE.Mesh(new THREE.PlaneGeometry(6,3),new THREE.MeshStandardMaterial({color:0xcfcac0,roughness:.95}));
+murApercu.position.set(0.6,1.5,-0.002);murApercu.receiveShadow=true;monde.add(murApercu);
+let decor=null, CAT=null;
+const unites={}, pieces={};          // par identifiant de modèle ; « groupe » pour le groupe
+const E={modele:0,variante:0,poser:'ui',capots:false,degag:false,dehors:false,vue:'normal',marche:'arret',legendes:false,
+  goulUI:{D_horizontale:false,D_verticale:false,G_horizontale:false,G_verticale:false},
+  goulGRP:{D_monte:false,D_descend:false,G_monte:false,G_descend:false}};
+let ouverture=0;                      // 0 fermé … 1 ouvert (animé)
+
+const chargeur=new GLTFLoader();
+chargeur.setDRACOLoader(new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/'));
+const charge=u=>new Promise((ok,ko)=>chargeur.load(u+'?v='+encodeURIComponent(VERSION),g=>ok(g.scene),undefined,ko));   // ?v= : pas de vieux modèle en cache
+
+// ---- vue détaillée : coques rendues transparentes, pièces masquées, vue éclatée (décalages en mm, axes x droite, y haut, z avant), légendes
+const COQUE=/_(Corps|Facade|Joues|Bandeau_haut|Volet|Grille_aspiration)(\d{3})?$|^GRP_(Socle|Toit|Flanc_droit|Panneau_avant_droit|Montants|Facade_pavillon|Cadre_grille|Grille_lames|Grille_bossages|Capot_raccordement|Moyeu_grille)/;
+const MASQUE=/_(Bouche_soufflage|Grille_fond|Filtre_[GD])(\d{3})?$|^GRP_(Interieur|Tole_raccords)/;
+const ECLATE=[
+ [/_Facade(\d{3})?$/,[0,40,280]],[/_Bandeau_haut/,[0,110,210]],[/_Filtre_[GD]/,[0,20,190]],[/_Volet(\d{3})?$/,[0,-70,170]],[/_Grille_(aspiration|fond)/,[0,130,0]],
+ [/_INT_(Echangeur|Flasques|Epingles_cuivre)/,[0,40,70]],[/_INT_Turbine/,[0,-120,40]],[/_INT_Moteur_turbine/,[150,-120,40]],[/_INT_Palier/,[-90,-120,40]],
+ [/_INT_(Bac_condensats|Tuyau_condensats)/,[0,-190,120]],[/_INT_(Boitier_electronique|Carte_electronique|Composants|Bornier)/,[210,0,0]],[/_INT_Moteur_volet/,[210,-70,0]],
+ [/_INT_(Tubes_cuivre|Ecrous_flare|Isolant)/,[0,-250,0]],
+ [/^GRP_Toit/,[0,330,0]],[/^GRP_Capot_raccordement/,[430,0,0]],[/^GRP_(Cadre_grille|Grille_lames|Grille_bossages|Grille_vis|Plaque_logo|Moyeu_grille)|^GRP_Logo(\d{3})?$/,[0,0,430]],
+ [/^GRP_Facade_pavillon/,[0,0,310]],[/^GRP_Helice/,[0,0,200]],[/^GRP_INT_Moteur_ventilateur/,[0,0,90]],[/^GRP_Panneau_avant_droit/,[0,0,330]],[/^GRP_Flanc_droit/,[250,0,0]],
+ [/^GRP_INT_Boitier_electrique/,[0,170,0]],[/^GRP_INT_Jaquette/,[60,0,210]],
+];
+const LEGENDES=[
+ [/_Facade(\d{3})?$/,'Façade'],[/_Filtre_G/,'Filtres à air'],[/_Volet(\d{3})?$/,'Volet de soufflage'],[/_INT_Echangeur/,'Échangeur à ailettes'],[/_INT_Turbine/,'Turbine tangentielle'],
+ [/_INT_Moteur_turbine/,'Moteur de turbine'],[/_INT_Bac_condensats/,'Bac à condensats'],[/_INT_Tuyau_condensats/,'Évacuation des condensats'],[/_INT_Boitier_electronique/,'Boîtier électronique'],
+ [/_INT_Tubes_cuivre/,'Liaisons frigorifiques'],[/_INT_Moteur_volet/,'Moteur de volet'],
+ [/^GRP_Helice/,'Ventilateur'],[/^GRP_INT_Moteur_ventilateur/,'Moteur du ventilateur'],[/^GRP_Batterie_ailettes/,'Échangeur extérieur'],[/^GRP_INT_Compresseur/,'Compresseur Inverter'],
+ [/^GRP_INT_Jaquette/,'Jaquette acoustique'],[/^GRP_INT_Bouteille/,'Bouteille anti-coup de liquide'],[/^GRP_INT_Vanne_4_voies/,'Vanne 4 voies (chaud / froid)'],[/^GRP_INT_Detendeurs/,'Détendeurs électroniques'],
+ [/^GRP_INT_Carte_puissance/,'Carte de puissance'],[/^GRP_INT_Radiateur/,'Radiateur de l’électronique'],[/^GRP_INT_Boitier_electrique/,'Boîtier électrique'],[/^GRP_Vannes/,'Vannes d’arrêt A à D'],
+ [/^GRP_Capot_raccordement/,'Capot de raccordement'],[/^SUP_Plots/,'Plots antivibratiles'],
+];
+function etiquette(texte){
+  const c=document.createElement('canvas');c.width=512;c.height=96;const x=c.getContext('2d');
+  x.font='600 38px system-ui,sans-serif';const w=Math.min(500,x.measureText(texte).width+44);
+  x.fillStyle='rgba(12,20,30,.86)';x.beginPath();x.roundRect((512-w)/2,10,w,76,22);x.fill();
+  x.strokeStyle='#4aa8e8';x.lineWidth=3;x.stroke();
+  x.fillStyle='#fff';x.textAlign='center';x.textBaseline='middle';x.fillText(texte,256,50,w-24);
+  const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,depthTest:false,depthWrite:false,transparent:true}));
+  s.scale.set(256,48,1);s.renderOrder=20;s.visible=false;return s;               // en mm : le parent est à l'échelle 0,001
+}
+let texAilettes=null;
+function textureAilettes(){            // ailettes d'échangeur : fines bandes (pas de 2 mm), la texture procédurale de Blender ne passe pas dans les GLB
+  if(texAilettes)return texAilettes;
+  const c=document.createElement('canvas');c.width=64;c.height=4;const x=c.getContext('2d');
+  for(let i=0;i<8;i++){x.fillStyle='#d6dade';x.fillRect(i*8,0,5,4);x.fillStyle='#8b9198';x.fillRect(i*8+5,0,3,4)}   // pas de 4 mm, contraste modéré : moins de moiré dans le casque
+  texAilettes=new THREE.CanvasTexture(c);texAilettes.colorSpace=THREE.SRGBColorSpace;texAilettes.wrapS=texAilettes.wrapT=THREE.RepeatWrapping;texAilettes.anisotropy=8;
+  return texAilettes;
+}
+function uvAilettes(mesh){
+  const g=mesh.geometry;if(g.attributes.uv)return;
+  const p=g.attributes.position, uv=new Float32Array(p.count*2);
+  for(let i=0;i<p.count;i++){uv[2*i]=(p.getX(i)+p.getZ(i))/32;uv[2*i+1]=p.getY(i)/32}
+  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+}
+function repere(racine,cles){
+  const p={facade:[],volet:[],capot:[],goul:{},turbine:[],helice:[],masque:[],mobiles:[],etiq:[],matCoque:new Set()};
+  cles.forEach(k=>p.goul[k]=[]);
+  const aEtiqueter=[];
+  racine.traverse(o=>{
+    const n=o.name;
+    if(/_Facade(\d{3})?$/.test(n))p.facade.push(o);
+    else if(/_Volet(\d{3})?$/.test(n))p.volet.push(o);
+    else if(/Capot_raccordement(\d{3})?$/.test(n)){p.capot.push(o);o.userData.capot=true}
+    if(/_INT_Turbine/.test(n))p.turbine.push(o);
+    if(/^GRP_Helice/.test(n))p.helice.push(o);
+    cles.forEach(k=>{if(new RegExp('Goulotte_'+k+'(\\d{3})?$').test(n))p.goul[k].push(o)});
+    if(MASQUE.test(n))p.masque.push(o);
+    if(o.isMesh){
+      if(COQUE.test(n))p.matCoque.add(o.material);
+      if(o.material.name==='ailettes'){uvAilettes(o);o.material.map=textureAilettes();o.material.color.setRGB(1,1,1);o.material.metalness=.6;o.material.needsUpdate=true}
+    }
+    const ex=ECLATE.find(r=>r[0].test(n));
+    if(ex||o.userData.capot){o.userData.p0=o.position.clone();o.userData.ex=new THREE.Vector3(...(ex?ex[1]:[0,0,0]));p.mobiles.push(o)}
+    const lg=o.isMesh&&LEGENDES.find(r=>r[0].test(n));
+    if(lg)aEtiqueter.push([o,lg[1]]);
+  });
+  for(const [o,t] of aEtiqueter){          // l'étiquette est un enfant de la pièce : elle la suit dans la vue éclatée
+    o.geometry.computeBoundingBox();const s=etiquette(t);o.geometry.boundingBox.getCenter(s.position);o.add(s);p.etiq.push(s);
+  }
+  return p;
+}
+// ---- flux d'air en particules (bleu = air froid, orange = air chaud)
+function pointRond(){
+  const c=document.createElement('canvas');c.width=c.height=64;const x=c.getContext('2d'), g=x.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.4,'rgba(255,255,255,.55)');g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g;x.fillRect(0,0,64,64);return new THREE.CanvasTexture(c);
+}
+class Flux{
+  constructor(n,parent){
+    this.n=n;this.p=new Float32Array(n*3);this.v=new Float32Array(n*3);this.age=new Float32Array(n);this.vie=new Float32Array(n);
+    for(let i=0;i<n;i++){this.age[i]=Math.random()*2;this.vie[i]=0}
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(this.p,3));
+    this.pts=new THREE.Points(g,new THREE.PointsMaterial({size:.04,map:pointRond(),transparent:true,opacity:.7,depthWrite:false}));   // mélange normal : l'additif devient blanc sur un mur clair
+    this.pts.frustumCulled=false;this.pts.visible=false;this.pts.renderOrder=15;parent.add(this.pts);
+  }
+  maj(dt,actif,couleur,pesanteur,emettre){
+    this.pts.visible=actif;if(!actif)return;
+    this.pts.material.color.setHex(couleur);
+    const p=this.p,v=this.v;
+    for(let i=0;i<this.n;i++){
+      const j=3*i;this.age[i]+=dt;
+      if(this.age[i]>this.vie[i]){const e=emettre();p[j]=e[0];p[j+1]=e[1];p[j+2]=e[2];v[j]=e[3];v[j+1]=e[4];v[j+2]=e[5];this.vie[i]=e[6];this.age[i]=0;continue}
+      v[j+1]+=pesanteur*dt;p[j]+=v[j]*dt;p[j+1]+=v[j+1]*dt;p[j+2]+=v[j+2]*dt;
+    }
+    this.pts.geometry.attributes.position.needsUpdate=true;
+  }
+}
+const fluxUI=new Flux(700,ancreUI), fluxGRP=new Flux(600,ancreGRP), R=Math.random;
+function boiteDegagement(l,h,p,x,y,z,couleur){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(l,h,p),new THREE.MeshBasicMaterial({color:couleur,transparent:true,opacity:.28,depthWrite:false}));
+  m.position.set(x,y,z);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:couleur})));
+  return m;
+}
+function degagementsUI(m){          // manuel Perfera : 30 mm au plafond, 50 mm de chaque côté
+  const g=new THREE.Group(), H=m.H/1000,L=m.L/1000,P=m.P/1000;
+  g.add(boiteDegagement(L+.1,.03,P,0,H/2+.015,P/2,0x1e90ff));
+  g.add(boiteDegagement(.05,H,P,-L/2-.025,0,P/2,0x1e90ff),boiteDegagement(.05,H,P,L/2+.025,0,P/2,0x1e90ff));
+  return g;
+}
+function degagementsGRP(c){         // manuel 4MXM p. 5 : 100 mm derrière (déjà dans le support), 50 mm côté batterie, 350 mm côté raccords,
+                                    // 350 mm devant le soufflage si un obstacle lui fait face (vert)
+  const g=new THREE.Group(), H=c.H/1000,P=c.P/1000,r=c.recul/1000,x0=c.x_min/1000,x1=c.x_max/1000;
+  const d=c.degagements||{}, av=(d.avant||350)/1000, xc=(c.x_car_max??c.x_max)/1000;
+  g.add(boiteDegagement(.05,H,P,x0-.025,H/2,r+P/2,0x1e90ff),boiteDegagement(.35,H,P,x1+.175,H/2,r+P/2,0xff8c00));
+  g.add(boiteDegagement(x1-x0,H,r,(x0+x1)/2,H/2,r/2,0x1e90ff));
+  g.add(boiteDegagement(xc-x0,H,av,(x0+xc)/2,H/2,r+P+av/2,0x2ecc71));
+  return g;
+}
+// veinage du Stylish bois noir : petite texture dessinée dans un canvas (les textures procédurales de Blender ne passent pas dans les GLB)
+let texBois=null;
+function textureBois(){
+  if(texBois)return texBois;
+  const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');
+  let s=7;const rnd=()=>(s=(s*16807)%2147483647)/2147483647;
+  x.fillStyle='#1d1612';x.fillRect(0,0,512,256);
+  for(let i=0;i<260;i++){
+    const y=rnd()*256, clair=rnd()<.45, a=.05+rnd()*.22, amp=.5+rnd()*2.5, ph=rnd()*6.28, f=1+Math.floor(rnd()*2);
+    x.strokeStyle=clair?`rgba(92,70,54,${a})`:`rgba(4,3,3,${a+.1})`;x.lineWidth=.6+rnd()*1.8;x.beginPath();
+    for(let u=0;u<=512;u+=16){const v=y+Math.sin(u/512*6.2832*f+ph)*amp;u?x.lineTo(u,v):x.moveTo(u,v)}   // f entier : raccord sans couture
+    x.stroke();
+  }
+  texBois=new THREE.CanvasTexture(c);texBois.colorSpace=THREE.SRGBColorSpace;
+  texBois.wrapS=texBois.wrapT=THREE.RepeatWrapping;texBois.anisotropy=8;
+  return texBois;
+}
+function uvFacade(mesh){            // UV planaires (maillage en mm) : u le long de l'unité, v sur la hauteur et le retour dessous
+  const g=mesh.geometry;if(g.attributes.uv)return;
+  const p=g.attributes.position, uv=new Float32Array(p.count*2);
+  for(let i=0;i<p.count;i++){uv[2*i]=p.getX(i)/520;uv[2*i+1]=(p.getY(i)-p.getZ(i))/260}
+  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+}
+async function init(){
+  CAT=await (await fetch('catalogue.json?v='+encodeURIComponent(VERSION),{cache:'no-cache'})).json();
+  for(const m of CAT.modeles){
+    const s=await charge(m.fichier);s.visible=false;ancreUI.add(s);unites[m.id]=s;ombres(s,true);
+    pieces[m.id]=repere(s,Object.keys(E.goulUI));
+    s.userData.degag=degagementsUI(m);s.add(s.userData.degag);
+  }
+  const g=await charge(CAT.groupe.fichier);ancreGRP.add(g);unites.groupe=g;ombres(g,true);
+  pieces.groupe=repere(g,Object.keys(E.goulGRP));
+  g.userData.degag=degagementsGRP(CAT.groupe);g.add(g.userData.degag);
+  pret=true;apercu();appliquer();construirePanneauHTML();msg('Version '+VERSION+'. Glisser pour tourner, molette pour zoomer.');
+}
+function apercu(){
+  monde.position.set(0,0,0);monde.rotation.set(0,0,0);
+  ancreUI.position.set(-0.3,2.2,0);ancreUI.quaternion.identity();ancreUI.visible=true;
+  ancreGRP.position.set(1.7,1.0,0);ancreGRP.quaternion.identity();ancreGRP.visible=true;
+  murApercu.visible=true;if(decor)decor.visible=false;scene.background=CIEL;viserSoleil(.7,1.4,0);
+}
+const modele=()=>CAT.modeles[E.modele];
+function appliquer(){
+  const m=modele(), v=m.variantes[E.variante];
+  for(const mm of CAT.modeles)unites[mm.id].visible=mm.id===m.id;
+  unites[m.id].traverse(o=>{
+    if(!o.isMesh)return;
+    const n=o.material.name, r=/_facade$/.test(n)?v.facade:/_corps$/.test(n)?v.corps:null;
+    if(r){
+      o.material.color.setRGB(...r.couleur);o.material.roughness=r.rugosite;o.material.metalness=r.metal;
+      const bois=v.id==='bois_noir'&&r===v.facade;
+      if(bois){uvFacade(o);o.material.color.setRGB(1,1,1)}
+      const map=bois?textureBois():null;
+      if(o.material.map!==map){o.material.map=map;o.material.needsUpdate=true}
+    }
+  });
+  for(const mm of CAT.modeles)for(const k in E.goulUI)pieces[mm.id].goul[k].forEach(o=>o.visible=E.goulUI[k]);
+  for(const k in E.goulGRP)pieces.groupe.goul[k].forEach(o=>o.visible=E.goulGRP[k]);
+  for(const id in unites)unites[id].userData.degag.visible=E.degag;
+  const tr=E.vue!=='normal';            // coques transparentes : on voit les pièces internes
+  for(const id in pieces){
+    const P=pieces[id];
+    P.matCoque.forEach(mt=>{if(mt.transparent!==tr){mt.transparent=tr;mt.depthWrite=!tr;mt.needsUpdate=true}mt.opacity=tr?.14:1});
+    P.masque.forEach(o=>o.visible=!tr);
+    P.etiq.forEach(s=>s.visible=E.legendes);
+  }
+  rafraichirUI();
+}
+let eclat=0, voletMarche=0, vitesse=0, temps=0, pret=false;   // pret : tous les modèles sont chargés
+const vers=(v,c,pas)=>v===c?v:v+Math.sign(c-v)*Math.min(Math.abs(c-v),pas), lisse=x=>x*x*(3-2*x);
+function animer(dt){
+  temps+=dt;
+  ouverture=vers(ouverture,E.capots?1:0,dt*1.6);eclat=vers(eclat,E.vue==='eclate'?1:0,dt*1.1);
+  const marche=E.marche!=='arret', froid=E.marche==='froid';
+  vitesse=vers(vitesse,marche?1:0,dt*.7);
+  voletMarche+=((marche?(froid?.5:.95)+.1*Math.sin(temps*.9):0)-voletMarche)*Math.min(1,dt*2.5);
+  const k=lisse(ouverture), e=lisse(eclat), rad=THREE.MathUtils.degToRad;
+  for(const m of CAT.modeles){
+    const P=pieces[m.id];
+    P.facade.forEach(o=>o.rotation.x=rad(-62)*k);
+    P.volet.forEach(o=>o.rotation.x=rad(m.volet_bas?38:-48)*Math.max(k,voletMarche));
+    if(unites[m.id].visible)P.turbine.forEach(o=>o.rotation.x+=dt*17*vitesse);
+  }
+  pieces.groupe.helice.forEach(o=>o.rotation.z-=dt*13*vitesse);
+  for(const id in pieces)for(const o of pieces[id].mobiles){
+    o.position.copy(o.userData.p0).addScaledVector(o.userData.ex,e);
+    if(o.userData.capot){o.position.x+=240*k;o.position.z+=90*k;o.rotation.y=rad(20)*k}
+  }
+  // flux d'air : l'unité souffle du froid (bleu) ou du chaud (orange), le groupe rejette l'inverse
+  const m=modele(), H=m.H/1000, L=m.L/1000, P=m.P/1000, g=CAT.groupe, vt=g.ventilateur||{x:-168,z:377,r:292};
+  fluxUI.maj(dt,marche&&ancreUI.visible,froid?0x1f8fff:0xff5a0a,froid?-.45:.1,()=>{
+    const d=froid?[0,m.volet_bas?-.5:-.2,1]:[0,-1,.38], n=Math.hypot(d[1],d[2]), s=.9+R()*.5;
+    return[(R()-.5)*(L-.18),-H/2+.005,m.volet_bas?P*.55:P*.82,(R()-.5)*.1,d[1]/n*s+(R()-.5)*.08,d[2]/n*s+(R()-.5)*.08,1.5+R()*.9]});
+  const zf=(g.recul+g.P)/1000+.01, rm=vt.r/1000-.03;
+  fluxGRP.maj(dt,marche&&ancreGRP.visible,froid?0xff5a0a:0x1f8fff,froid?.35:-.3,()=>{
+    const a=R()*6.2832, r=.05+(rm-.05)*Math.sqrt(R()), c=Math.cos(a), s=Math.sin(a);
+    return[vt.x/1000+r*c,vt.z/1000+r*s,zf,-s*.5,c*.5,1.9+R()*.7,.8+R()*.6]});
+}
+
+// ---- commandes : une seule liste, utilisée par le panneau HTML et par le panneau flottant dans le casque
+const pas=d=>{const a=E.poser==='ui'?ancreUI:ancreGRP;a.position.y=Math.round((a.position.y+d)*20)/20;rafraichirUI()};
+function hauteurTexte(){
+  if(!CAT)return'';
+  if(E.poser==='ui'){const h=modele().H/2000,y=ancreUI.position.y;return`Haut ${(y+h).toFixed(2)} m, bas ${(y-h).toFixed(2)} m`+(y-h<1.8?' (mini 1,80)':'')}
+  return`Dessous du groupe ${ancreGRP.position.y.toFixed(2)} m`;
+}
+const CMD=[
+ {t:'Modèle',b:[{l:'◀',a:()=>{E.modele=(E.modele+CAT.modeles.length-1)%CAT.modeles.length;E.variante=0}},{l:()=>'Daikin '+modele().id,w:2,on:()=>true},{l:'▶',a:()=>{E.modele=(E.modele+1)%CAT.modeles.length;E.variante=0}}]},
+ {t:'Couleur',b:()=>modele().variantes.map((v,i)=>({l:v.nom,a:()=>E.variante=i,on:()=>E.variante===i}))},
+ {t:'Objet à poser et à régler',b:[{l:'Unité intérieure',a:()=>E.poser='ui',on:()=>E.poser==='ui'},{l:'Groupe extérieur',a:()=>E.poser='grp',on:()=>E.poser==='grp'}]},
+ {t:()=>'Hauteur : '+hauteurTexte(),b:[{l:'▼ 5 cm',a:()=>pas(-.05)},{l:'▲ 5 cm',a:()=>pas(.05)}]},
+ {t:'Goulottes de l\'unité (50 cm)',b:[['D_horizontale','Droite ↔'],['D_verticale','Droite ↓'],['G_horizontale','Gauche ↔'],['G_verticale','Gauche ↓']].map(([k,l])=>({l,a:()=>E.goulUI[k]=!E.goulUI[k],on:()=>E.goulUI[k]}))},
+ {t:'Goulottes du groupe (2 m)',b:[['D_monte','Droite ↑'],['D_descend','Droite ↓'],['G_monte','Gauche ↑'],['G_descend','Gauche ↓']].map(([k,l])=>({l,a:()=>E.goulGRP[k]=!E.goulGRP[k],on:()=>E.goulGRP[k]}))},
+ {t:'Vue de l\'intérieur',b:[['normal','Normale'],['transp','Transparente'],['eclate','Éclatée']].map(([k,l])=>({l,a:()=>E.vue=k,on:()=>E.vue===k}))},
+ {t:'Fonctionnement (flux d\'air)',b:[['arret','Arrêt'],['froid','Froid ❄'],['chaud','Chaud ☀']].map(([k,l])=>({l,a:()=>E.marche=k,on:()=>E.marche===k}))},
+ {t:'Affichage',b:[{l:'Capots ouverts',a:()=>E.capots=!E.capots,on:()=>E.capots},{l:'Légendes',a:()=>E.legendes=!E.legendes,on:()=>E.legendes},{l:'Dégagements',a:()=>E.degag=!E.degag,on:()=>E.degag}]},
+ {t:'Casque',xr:true,b:[{l:'Dedans / dehors',a:()=>{E.dehors=!E.dehors;placerVR()},vr:true},{l:'Quitter',a:()=>renderer.xr.getSession()?.end()}]},
+];
+const lignes=()=>CMD.map(c=>({...c,t:typeof c.t==='function'?c.t():c.t,b:(typeof c.b==='function'?c.b():c.b).map(b=>({...b,l:typeof b.l==='function'?b.l():b.l}))}));
+function construirePanneauHTML(){
+  const p=$('#panneau');p.innerHTML='';
+  for(const c of lignes()){
+    if(c.xr)continue;
+    const h=document.createElement('h2');h.textContent=c.t;p.appendChild(h);
+    const r=document.createElement('div');r.className='rangee';p.appendChild(r);
+    for(const b of c.b){const e=document.createElement('button');e.textContent=b.l;if(b.on?.())e.classList.add('actif');if(!b.a)e.disabled=true;e.onclick=()=>{b.a?.();appliquer()};r.appendChild(e)}
+  }
+  const i=document.createElement('p');i.id='info';const m=modele();
+  i.textContent=`Vue de l'intérieur : « Transparente » montre les pièces à travers la carrosserie, « Éclatée » les écarte. Fonctionnement : bleu = air froid, orange = air chaud (le groupe rejette l'inverse de l'unité). Les pièces internes sont une disposition de principe, pas un relevé du manuel de service. Daikin ${m.id} : ${m.H} × ${m.L} × ${m.P} mm (H × L × P). Groupe 4MXM68A9 : 734 × 974 × 408 mm, sur support mural. Dégagements du groupe : 100 mm derrière, 50 mm côté batterie, 350 mm côté raccords (orange), 350 mm devant le soufflage si un obstacle lui fait face (vert, obstacle de 1,20 m de haut au plus).`;p.appendChild(i);
+}
+// panneau flottant (casque) : texture canvas, cliqué avec le rayon de la manette
+const HP=1740;                         // hauteur du panneau flottant (px)
+const cv=document.createElement('canvas');cv.width=1024;cv.height=HP;
+const tex=new THREE.CanvasTexture(cv);tex.colorSpace=THREE.SRGBColorSpace;
+const panneau3D=new THREE.Mesh(new THREE.PlaneGeometry(.46,.46*HP/1024),new THREE.MeshBasicMaterial({map:tex,transparent:true}));
+panneau3D.visible=false;scene.add(panneau3D);
+let zones=[];
+function dessinerPanneau(){
+  const c=cv.getContext('2d');zones=[];
+  c.clearRect(0,0,1024,HP);c.fillStyle='rgba(18,24,31,.93)';c.beginPath();c.roundRect(0,0,1024,HP,36);c.fill();
+  let y=30;c.textBaseline='middle';
+  for(const l of lignes()){
+    const bs=l.b.filter(b=>!b.vr||modeXR==='vr');if(!bs.length)continue;
+    c.fillStyle='#9fb2c6';c.font='30px system-ui,sans-serif';c.textAlign='left';c.fillText(l.t,36,y+18);y+=46;
+    const tot=bs.reduce((s,b)=>s+(b.w||1),0), larg=(1024-72-(bs.length-1)*14)/tot;let x=36;
+    for(const b of bs){
+      const w=larg*(b.w||1);
+      c.fillStyle=b.on?.()?'#0072bc':(b.a?'#2c3947':'#1d2630');c.beginPath();c.roundRect(x,y,w,92,18);c.fill();
+      c.fillStyle='#fff';c.font='600 34px system-ui,sans-serif';c.textAlign='center';c.fillText(b.l,x+w/2,y+48,w-16);
+      if(b.a)zones.push({x,y,w,h:92,a:b.a});x+=w+14;
+    }
+    y+=92+22;
+  }
+  c.fillStyle='#9fb2c6';c.font='26px system-ui,sans-serif';c.textAlign='left';
+  c.fillText(modeXR==='ar'?(murVu?'Mur détecté (anneau vert) : gâchette pour poser dessus.':'Pas de mur détecté : la gâchette pose à 1,5 m devant la manette.'):'Poignée : rappeler ce panneau devant soi.',36,HP-78);
+  if(modeXR==='ar')c.fillText('Poignée : rappeler ce panneau. '+etatAR,36,HP-36);
+  c.font='20px system-ui,sans-serif';c.fillStyle='#6f8193';c.fillText('Version '+VERSION+(diagXR?' · '+diagXR:''),36,HP-10);
+  tex.needsUpdate=true;
+}
+function rafraichirUI(){if(!CAT)return;if(renderer.xr.isPresenting)dessinerPanneau();else construirePanneauHTML()}
+
+// ---- XR
+let modeXR=null, sourceHit=null, reticule, manettes=[], murVu=false, etatAR='', diagXR='';
+function poserDevantSoi(){            // AR : les deux objets apparaissent tout de suite, à 1,6 m devant soi, avant toute pose sur un mur
+  const cam=renderer.xr.getCamera(), p=new THREE.Vector3(), d=new THREE.Vector3();
+  cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;if(d.lengthSq()<1e-6)d.set(0,0,-1);d.normalize();
+  const cote=new THREE.Vector3().crossVectors(d,HAUT), n=d.clone().negate();
+  const garde=E.poser;
+  poserContreMur(ancreUI,p.clone().addScaledVector(d,1.6).addScaledVector(cote,-.7).setY(1.9),n);
+  poserContreMur(ancreGRP,p.clone().addScaledVector(d,1.6).addScaledVector(cote,.8).setY(.6),n);
+  E.poser=garde;
+}
+reticule=new THREE.Mesh(new THREE.RingGeometry(.05,.065,32),new THREE.MeshBasicMaterial({color:0x00c853,side:THREE.DoubleSide}));
+reticule.matrixAutoUpdate=false;reticule.visible=false;scene.add(reticule);
+const rc=new THREE.Raycaster(), tmpM=new THREE.Matrix4(), HAUT=new THREE.Vector3(0,1,0);
+let dernierHit=null;                   // {point, normale}
+function rappelerPanneau(){
+  const cam=renderer.xr.getCamera(), p=new THREE.Vector3(), d=new THREE.Vector3();
+  cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;d.normalize();
+  panneau3D.position.copy(p).addScaledVector(d,.75).add(new THREE.Vector3(0,-.12,0));
+  panneau3D.lookAt(p.x,panneau3D.position.y,p.z);panneau3D.visible=true;dessinerPanneau();
+}
+function poserContreMur(ancre,point,normale){
+  const z=normale.clone();z.y=0;if(z.lengthSq()<1e-6)return;z.normalize();
+  const x=new THREE.Vector3().crossVectors(HAUT,z);
+  ancre.quaternion.setFromRotationMatrix(tmpM.makeBasis(x,HAUT,z));
+  ancre.position.set(point.x,Math.round(point.y*20)/20,point.z);ancre.visible=true;rafraichirUI();
+}
+function surSelection(ctrl){
+  tmpM.identity().extractRotation(ctrl.matrixWorld);
+  rc.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);rc.ray.direction.set(0,0,-1).applyMatrix4(tmpM);
+  if(panneau3D.visible){
+    const h=rc.intersectObject(panneau3D)[0];
+    if(h){const px=h.uv.x*1024,py=(1-h.uv.y)*HP, z=zones.find(z=>px>=z.x&&px<=z.x+z.w&&py>=z.y&&py<=z.y+z.h);if(z){z.a();appliquer()}return}
+  }
+  if(modeXR!=='ar')return;
+  const ancre=E.poser==='ui'?ancreUI:ancreGRP;
+  if(dernierHit)poserContreMur(ancre,dernierHit.point,dernierHit.normale);
+  else{                                // pas de mur détecté : pose à 1,5 m le long du rayon, face à soi
+    const p=rc.ray.at(1.5,new THREE.Vector3()), n=rc.ray.direction.clone().negate();poserContreMur(ancre,p,n);
+  }
+}
+for(let i=0;i<2;i++){
+  const c=renderer.xr.getController(i);
+  c.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(0,0,-3)]),new THREE.LineBasicMaterial({color:0x66ccff})));
+  c.addEventListener('select',()=>surSelection(c));c.addEventListener('squeeze',rappelerPanneau);
+  scene.add(c);manettes.push(c);
+}
+let jetonHit=0;
+async function sourceDeHit(session){
+  // Panne v3 (Quest 3, chargement sans fin) : l'ancienne source était annulée AVANT d'avoir la nouvelle ;
+  // l'image suivante appelait getHitTestResults() sur une source annulée, l'exception arrêtait la boucle de rendu.
+  const jeton=++jetonHit, ancienne=sourceHit;sourceHit=null;
+  try{ancienne?.cancel?.()}catch(e){}
+  try{
+    const s=[...session.inputSources].filter(s=>s.targetRayMode==='tracked-pointer');
+    const src=s.find(s=>s.handedness==='right')||s[0];
+    const space=src?src.targetRaySpace:await session.requestReferenceSpace('viewer');
+    const nouvelle=await session.requestHitTestSource({space});
+    if(jeton!==jetonHit||modeXR!=='ar'){nouvelle.cancel?.();return}   // un appel plus récent a pris la main
+    sourceHit=nouvelle;etatAR='';
+  }catch(e){if(jeton===jetonHit){sourceHit=null;etatAR='(détection des murs indisponible)'}}
+  if(renderer.xr.isPresenting)dessinerPanneau();
+}
+function placerVR(){
+  const d=CAT.decor;
+  ancreUI.position.fromArray(d.ui);ancreUI.quaternion.identity();ancreUI.visible=true;
+  ancreGRP.position.fromArray(d.groupe);ancreGRP.rotation.set(0,d.groupe_rotY,0);ancreGRP.visible=true;
+  if(E.dehors){const p=new THREE.Vector3(d.groupe[0]-.3,0,-d.mur_ep-2.6);monde.rotation.set(0,Math.PI,0);monde.position.set(p.x,0,p.z)}
+  else{monde.rotation.set(0,0,0);monde.position.set(0,0,-2.6)}
+  viserSoleil(0,1.5,-2.6);
+  rafraichirUI();
+}
+async function demarrer(mode){
+  if(!CAT){msg('Modèles encore en chargement : réessayer dans quelques secondes.');return}
+  if(renderer.xr.isPresenting)return;
+  if(!navigator.xr){msg('WebXR indisponible dans ce navigateur (ouvrir la page en HTTPS dans le navigateur du Quest).');return}
+  if(mode==='ar'&&!(await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false))){msg('Réalité augmentée non proposée par ce navigateur (il faut le navigateur du Quest, page en HTTPS).');return}
+  let session;
+  const type=mode==='ar'?'immersive-ar':'immersive-vr';
+  try{                                  // 1er essai : avec la détection des murs ; 2e essai : sans rien d'optionnel
+    try{session=await navigator.xr.requestSession(type,mode==='ar'?{requiredFeatures:['local-floor'],optionalFeatures:['hit-test']}:{optionalFeatures:['local-floor']})}
+    catch(e1){session=await navigator.xr.requestSession(type,{optionalFeatures:['local-floor']})}
+  }catch(e){msg('Session '+mode.toUpperCase()+' refusée : '+e.message);return}
+  modeXR=mode;
+  diagXR=`${session.environmentBlendMode||'?'} · ${(session.enabledFeatures||[]).join(', ')||'fonctions ?'}`;
+  if(mode==='ar'&&session.environmentBlendMode==='opaque')etatAR='(passthrough refusé par le casque)';
+  try{renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session)}
+  catch(e){try{renderer.xr.setReferenceSpaceType('local');await renderer.xr.setSession(session)}catch(e2){msg('Démarrage '+mode.toUpperCase()+' impossible : '+e2.message);modeXR=null;session.end();return}}
+  murApercu.visible=false;
+  if(mode==='ar'){
+    scene.background=null;renderer.setClearColor(0x000000,0);monde.position.set(0,0,0);monde.rotation.set(0,0,0);
+    setTimeout(poserDevantSoi,500);
+    sourceDeHit(session);session.addEventListener('inputsourceschange',()=>sourceDeHit(session));
+  }else{
+    if(!decor){decor=await charge(CAT.decor.fichier);monde.add(decor);ombres(decor,false)}   // le décor reçoit les ombres sans en porter (sinon le plafond éteint la pièce)
+    decor.visible=true;scene.background=new THREE.Color(0xbfd6ee);placerVR();
+  }
+  setTimeout(rappelerPanneau,600);
+  session.addEventListener('end',()=>{modeXR=null;sourceHit=null;dernierHit=null;reticule.visible=false;panneau3D.visible=false;apercu();dimensionner();rafraichirUI()});
+}
+$('#btnAR').onclick=()=>demarrer('ar');$('#btnVR').onclick=()=>demarrer('vr');
+
+function dimensionner(){if(renderer.xr.isPresenting)return;const w=vue.clientWidth,h=vue.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}
+new ResizeObserver(dimensionner).observe(vue);dimensionner();
+const horloge=new THREE.Clock();let erreurBoucle='';
+renderer.setAnimationLoop((t,frame)=>{
+  const dt=horloge.getDelta();
+  try{                                 // une exception ici arrêterait la boucle de three.js : le casque resterait sur les trois points
+  if(pret)animer(Math.min(dt,.1));
+  if(frame&&modeXR==='ar'&&sourceHit){
+    const ref=renderer.xr.getReferenceSpace();dernierHit=null;
+    for(const r of frame.getHitTestResults(sourceHit)){
+      const pose=r.getPose(ref);if(!pose)continue;
+      const m=tmpM.fromArray(pose.transform.matrix), n=new THREE.Vector3().setFromMatrixColumn(m,1);
+      if(Math.abs(n.y)<.35){                      // plan vertical : un mur
+        dernierHit={point:new THREE.Vector3().setFromMatrixPosition(m),normale:n};
+        const z=n.clone().setY(0).normalize(), x=new THREE.Vector3().crossVectors(HAUT,z);
+        reticule.matrix.makeBasis(x,HAUT,z).setPosition(dernierHit.point);break;
+      }
+    }
+    reticule.visible=!!dernierHit;
+    if(murVu!==!!dernierHit){murVu=!!dernierHit;dessinerPanneau()}
+  }
+  }catch(e){
+    if(!erreurBoucle){erreurBoucle=e.name+' : '+e.message;diagXR=(diagXR?diagXR+' · ':'')+'erreur '+erreurBoucle;console.error(e);if(renderer.xr.isPresenting)dessinerPanneau()}
+  }
+  renderer.render(scene,camera);
+});
+window.clim={scene,renderer,camera,E,pieces,unites,orbite,pas:(n=1,dt=.05)=>{for(let i=0;i<n;i++)animer(dt);renderer.render(scene,camera)}};      // pour le diagnostic depuis la console
+init().catch(e=>{msg('Erreur de chargement : '+e.message);console.error(e)});
+</script>
+</body>
+</html>
