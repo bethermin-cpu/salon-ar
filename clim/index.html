@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clim Daikin : catalogue AR / VR</title>
+<style>
+  :root{--fond:#f3f4f6;--carte:#fff;--texte:#1c2530;--doux:#5d6b7a;--accent:#0072bc;--bord:#d5dbe2}
+  @media (prefers-color-scheme:dark){:root{--fond:#12161b;--carte:#1b2129;--texte:#e8edf2;--doux:#9aa7b5;--accent:#4aa8e8;--bord:#2e3742}}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--fond);color:var(--texte);display:flex;flex-direction:column;height:100dvh}
+  header{padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--bord)}
+  h1{font-size:17px;margin:0 auto 0 0}
+  main{flex:1;display:flex;min-height:0}
+  #vue{flex:1;min-width:0;position:relative}
+  canvas{display:block}
+  aside{width:330px;max-width:100%;overflow:auto;padding:12px 16px;background:var(--carte);border-left:1px solid var(--bord)}
+  @media (max-width:760px){main{flex-direction:column}aside{width:auto;border-left:0;border-top:1px solid var(--bord);max-height:48dvh}}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--doux);margin:14px 0 6px}
+  .rangee{display:flex;flex-wrap:wrap;gap:6px}
+  button{font:inherit;padding:8px 11px;border-radius:8px;border:1px solid var(--bord);background:var(--fond);color:var(--texte);cursor:pointer}
+  button.actif{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.xr{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.45;cursor:default}
+  #info{font-size:13px;color:var(--doux);margin:8px 0 0;line-height:1.45}
+  #msg{position:absolute;left:12px;bottom:10px;font-size:13px;color:var(--doux);background:var(--carte);padding:4px 8px;border-radius:6px}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<header>
+  <h1>Clim Daikin : unités murales et groupe extérieur</h1>
+  <button class="xr" id="btnAR">Réalité augmentée</button>
+  <button class="xr" id="btnVR">Réalité virtuelle</button>
+</header>
+<main>
+  <div id="vue"><div id="msg">Chargement…</div></div>
+  <aside id="panneau"></aside>
+</main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+
+const $=s=>document.querySelector(s), msg=t=>{$('#msg').textContent=t};
+const vue=$('#vue');
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.xr.enabled=true;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.0;
+vue.appendChild(renderer.domElement);
+const scene=new THREE.Scene(), CIEL=new THREE.Color(0xdfe7ef);
+scene.background=CIEL;
+scene.environment=new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(),0.04).texture;
+scene.environmentIntensity=0.55;
+scene.add(new THREE.HemisphereLight(0xffffff,0x8a8f96,0.35));
+const soleil=new THREE.DirectionalLight(0xfff4e2,1.3);soleil.position.set(-2,4,3);scene.add(soleil);
+const camera=new THREE.PerspectiveCamera(45,1,0.05,100);camera.position.set(-0.6,1.9,5.4);
+const orbite=new OrbitControls(camera,renderer.domElement);orbite.target.set(0.7,1.6,0);orbite.update();
+
+// ---- contenu : tout est dans « monde » ; les deux ancres se posent contre un mur (axe Z = normale du mur)
+const monde=new THREE.Group();scene.add(monde);
+const ancreUI=new THREE.Group(), ancreGRP=new THREE.Group();monde.add(ancreUI,ancreGRP);
+const murApercu=new THREE.Mesh(new THREE.PlaneGeometry(6,3),new THREE.MeshStandardMaterial({color:0xcfcac0,roughness:.95}));
+murApercu.position.set(0.6,1.5,-0.002);monde.add(murApercu);
+let decor=null, CAT=null;
+const unites={}, pieces={};          // par identifiant de modèle ; « groupe » pour le groupe
+const E={modele:0,variante:0,poser:'ui',capots:false,degag:false,dehors:false,
+  goulUI:{D_horizontale:false,D_verticale:false,G_horizontale:false,G_verticale:false},
+  goulGRP:{D_monte:false,D_descend:false,G_monte:false,G_descend:false}};
+let ouverture=0;                      // 0 fermé … 1 ouvert (animé)
+
+const chargeur=new GLTFLoader();
+chargeur.setDRACOLoader(new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/'));
+const charge=u=>new Promise((ok,ko)=>chargeur.load(u,g=>ok(g.scene),undefined,ko));
+
+function repere(racine,cles){
+  const p={facade:[],volet:[],capot:[],goul:{}};
+  cles.forEach(k=>p.goul[k]=[]);
+  racine.traverse(o=>{
+    if(/_Facade(\d{3})?$/.test(o.name))p.facade.push(o);
+    else if(/_Volet(\d{3})?$/.test(o.name))p.volet.push(o);
+    else if(/Capot_raccordement(\d{3})?$/.test(o.name)){p.capot.push(o);o.userData.p0=o.position.clone()}
+    cles.forEach(k=>{if(new RegExp('Goulotte_'+k+'(\\d{3})?$').test(o.name))p.goul[k].push(o)});
+  });
+  return p;
+}
+function boiteDegagement(l,h,p,x,y,z,couleur){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(l,h,p),new THREE.MeshBasicMaterial({color:couleur,transparent:true,opacity:.28,depthWrite:false}));
+  m.position.set(x,y,z);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color:couleur})));
+  return m;
+}
+function degagementsUI(m){          // manuel Perfera : 30 mm au plafond, 50 mm de chaque côté
+  const g=new THREE.Group(), H=m.H/1000,L=m.L/1000,P=m.P/1000;
+  g.add(boiteDegagement(L+.1,.03,P,0,H/2+.015,P/2,0x1e90ff));
+  g.add(boiteDegagement(.05,H,P,-L/2-.025,0,P/2,0x1e90ff),boiteDegagement(.05,H,P,L/2+.025,0,P/2,0x1e90ff));
+  return g;
+}
+function degagementsGRP(c){         // manuel 4MXM : 100 mm derrière (déjà dans le support), 50 mm côté batterie, 350 mm côté raccords
+  const g=new THREE.Group(), H=c.H/1000,P=c.P/1000,r=c.recul/1000,x0=c.x_min/1000,x1=c.x_max/1000;
+  g.add(boiteDegagement(.05,H,P,x0-.025,H/2,r+P/2,0x1e90ff),boiteDegagement(.35,H,P,x1+.175,H/2,r+P/2,0xff8c00));
+  g.add(boiteDegagement(x1-x0,H,r,(x0+x1)/2,H/2,r/2,0x1e90ff));
+  return g;
+}
+async function init(){
+  CAT=await (await fetch('catalogue.json')).json();
+  for(const m of CAT.modeles){
+    const s=await charge(m.fichier);s.visible=false;ancreUI.add(s);unites[m.id]=s;
+    pieces[m.id]=repere(s,Object.keys(E.goulUI));
+    s.userData.degag=degagementsUI(m);s.add(s.userData.degag);
+  }
+  const g=await charge(CAT.groupe.fichier);ancreGRP.add(g);unites.groupe=g;
+  pieces.groupe=repere(g,Object.keys(E.goulGRP));
+  g.userData.degag=degagementsGRP(CAT.groupe);g.add(g.userData.degag);
+  apercu();appliquer();construirePanneauHTML();msg('Glisser pour tourner, molette pour zoomer.');
+}
+function apercu(){
+  monde.position.set(0,0,0);monde.rotation.set(0,0,0);
+  ancreUI.position.set(-0.3,2.2,0);ancreUI.quaternion.identity();ancreUI.visible=true;
+  ancreGRP.position.set(1.7,1.0,0);ancreGRP.quaternion.identity();ancreGRP.visible=true;
+  murApercu.visible=true;if(decor)decor.visible=false;scene.background=CIEL;
+}
+const modele=()=>CAT.modeles[E.modele];
+function appliquer(){
+  const m=modele(), v=m.variantes[E.variante];
+  for(const mm of CAT.modeles)unites[mm.id].visible=mm.id===m.id;
+  unites[m.id].traverse(o=>{
+    if(!o.isMesh)return;
+    const n=o.material.name, r=/_facade$/.test(n)?v.facade:/_corps$/.test(n)?v.corps:null;
+    if(r){o.material.color.setRGB(...r.couleur);o.material.roughness=r.rugosite;o.material.metalness=r.metal}
+  });
+  for(const mm of CAT.modeles)for(const k in E.goulUI)pieces[mm.id].goul[k].forEach(o=>o.visible=E.goulUI[k]);
+  for(const k in E.goulGRP)pieces.groupe.goul[k].forEach(o=>o.visible=E.goulGRP[k]);
+  for(const id in unites)unites[id].userData.degag.visible=E.degag;
+  rafraichirUI();
+}
+function animerCapots(dt){
+  const cible=E.capots?1:0;if(ouverture===cible)return;
+  ouverture+=Math.sign(cible-ouverture)*Math.min(Math.abs(cible-ouverture),dt*1.6);
+  const k=ouverture*ouverture*(3-2*ouverture), rad=THREE.MathUtils.degToRad;
+  for(const m of CAT.modeles){
+    pieces[m.id].facade.forEach(o=>o.rotation.x=rad(-62)*k);
+    pieces[m.id].volet.forEach(o=>o.rotation.x=rad(m.volet_bas?38:-48)*k);
+  }
+  pieces.groupe.capot.forEach(o=>{o.position.copy(o.userData.p0).add(new THREE.Vector3(240*k,0,90*k));o.rotation.y=rad(20)*k});
+}
+
+// ---- commandes : une seule liste, utilisée par le panneau HTML et par le panneau flottant dans le casque
+const pas=d=>{const a=E.poser==='ui'?ancreUI:ancreGRP;a.position.y=Math.round((a.position.y+d)*20)/20;rafraichirUI()};
+function hauteurTexte(){
+  if(!CAT)return'';
+  if(E.poser==='ui'){const h=modele().H/2000,y=ancreUI.position.y;return`Haut ${(y+h).toFixed(2)} m, bas ${(y-h).toFixed(2)} m`+(y-h<1.8?' (mini 1,80)':'')}
+  return`Dessous du groupe ${ancreGRP.position.y.toFixed(2)} m`;
+}
+const CMD=[
+ {t:'Modèle',b:[{l:'◀',a:()=>{E.modele=(E.modele+CAT.modeles.length-1)%CAT.modeles.length;E.variante=0}},{l:()=>'Daikin '+modele().id,w:2,on:()=>true},{l:'▶',a:()=>{E.modele=(E.modele+1)%CAT.modeles.length;E.variante=0}}]},
+ {t:'Couleur',b:()=>modele().variantes.map((v,i)=>({l:v.nom,a:()=>E.variante=i,on:()=>E.variante===i}))},
+ {t:'Objet à poser et à régler',b:[{l:'Unité intérieure',a:()=>E.poser='ui',on:()=>E.poser==='ui'},{l:'Groupe extérieur',a:()=>E.poser='grp',on:()=>E.poser==='grp'}]},
+ {t:()=>'Hauteur : '+hauteurTexte(),b:[{l:'▼ 5 cm',a:()=>pas(-.05)},{l:'▲ 5 cm',a:()=>pas(.05)}]},
+ {t:'Goulottes de l\'unité (50 cm)',b:[['D_horizontale','Droite ↔'],['D_verticale','Droite ↓'],['G_horizontale','Gauche ↔'],['G_verticale','Gauche ↓']].map(([k,l])=>({l,a:()=>E.goulUI[k]=!E.goulUI[k],on:()=>E.goulUI[k]}))},
+ {t:'Goulottes du groupe (2 m)',b:[['D_monte','Droite ↑'],['D_descend','Droite ↓'],['G_monte','Gauche ↑'],['G_descend','Gauche ↓']].map(([k,l])=>({l,a:()=>E.goulGRP[k]=!E.goulGRP[k],on:()=>E.goulGRP[k]}))},
+ {t:'Affichage',b:[{l:'Capots ouverts',a:()=>E.capots=!E.capots,on:()=>E.capots},{l:'Dégagements',a:()=>E.degag=!E.degag,on:()=>E.degag}]},
+ {t:'Casque',xr:true,b:[{l:'Dedans / dehors',a:()=>{E.dehors=!E.dehors;placerVR()},vr:true},{l:'Quitter',a:()=>renderer.xr.getSession()?.end()}]},
+];
+const lignes=()=>CMD.map(c=>({...c,t:typeof c.t==='function'?c.t():c.t,b:(typeof c.b==='function'?c.b():c.b).map(b=>({...b,l:typeof b.l==='function'?b.l():b.l}))}));
+function construirePanneauHTML(){
+  const p=$('#panneau');p.innerHTML='';
+  for(const c of lignes()){
+    if(c.xr)continue;
+    const h=document.createElement('h2');h.textContent=c.t;p.appendChild(h);
+    const r=document.createElement('div');r.className='rangee';p.appendChild(r);
+    for(const b of c.b){const e=document.createElement('button');e.textContent=b.l;if(b.on?.())e.classList.add('actif');if(!b.a)e.disabled=true;e.onclick=()=>{b.a?.();appliquer()};r.appendChild(e)}
+  }
+  const i=document.createElement('p');i.id='info';const m=modele();
+  i.textContent=`Daikin ${m.id} : ${m.H} × ${m.L} × ${m.P} mm (H × L × P). Groupe 4MXM68A9 : 734 × 974 × 408 mm, sur support mural.`;p.appendChild(i);
+}
+// panneau flottant (casque) : texture canvas, cliqué avec le rayon de la manette
+const cv=document.createElement('canvas');cv.width=1024;cv.height=1400;
+const tex=new THREE.CanvasTexture(cv);tex.colorSpace=THREE.SRGBColorSpace;
+const panneau3D=new THREE.Mesh(new THREE.PlaneGeometry(.46,.46*1400/1024),new THREE.MeshBasicMaterial({map:tex,transparent:true}));
+panneau3D.visible=false;scene.add(panneau3D);
+let zones=[];
+function dessinerPanneau(){
+  const c=cv.getContext('2d');zones=[];
+  c.clearRect(0,0,1024,1400);c.fillStyle='rgba(18,24,31,.93)';c.beginPath();c.roundRect(0,0,1024,1400,36);c.fill();
+  let y=30;c.textBaseline='middle';
+  for(const l of lignes()){
+    const bs=l.b.filter(b=>!b.vr||modeXR==='vr');if(!bs.length)continue;
+    c.fillStyle='#9fb2c6';c.font='30px system-ui,sans-serif';c.textAlign='left';c.fillText(l.t,36,y+18);y+=46;
+    const tot=bs.reduce((s,b)=>s+(b.w||1),0), larg=(1024-72-(bs.length-1)*14)/tot;let x=36;
+    for(const b of bs){
+      const w=larg*(b.w||1);
+      c.fillStyle=b.on?.()?'#0072bc':(b.a?'#2c3947':'#1d2630');c.beginPath();c.roundRect(x,y,w,92,18);c.fill();
+      c.fillStyle='#fff';c.font='600 34px system-ui,sans-serif';c.textAlign='center';c.fillText(b.l,x+w/2,y+48,w-16);
+      if(b.a)zones.push({x,y,w,h:92,a:b.a});x+=w+14;
+    }
+    y+=92+22;
+  }
+  c.fillStyle='#9fb2c6';c.font='26px system-ui,sans-serif';c.textAlign='left';
+  c.fillText(modeXR==='ar'?'Gâchette sur un mur : poser. Poignée : rappeler ce panneau.':'Poignée : rappeler ce panneau devant soi.',36,1360);
+  tex.needsUpdate=true;
+}
+function rafraichirUI(){if(!CAT)return;if(renderer.xr.isPresenting)dessinerPanneau();else construirePanneauHTML()}
+
+// ---- XR
+let modeXR=null, sourceHit=null, reticule, manettes=[];
+reticule=new THREE.Mesh(new THREE.RingGeometry(.05,.065,32),new THREE.MeshBasicMaterial({color:0x00c853,side:THREE.DoubleSide}));
+reticule.matrixAutoUpdate=false;reticule.visible=false;scene.add(reticule);
+const rc=new THREE.Raycaster(), tmpM=new THREE.Matrix4(), HAUT=new THREE.Vector3(0,1,0);
+let dernierHit=null;                   // {point, normale}
+function rappelerPanneau(){
+  const cam=renderer.xr.getCamera(), p=new THREE.Vector3(), d=new THREE.Vector3();
+  cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;d.normalize();
+  panneau3D.position.copy(p).addScaledVector(d,.75).add(new THREE.Vector3(0,-.12,0));
+  panneau3D.lookAt(p.x,panneau3D.position.y,p.z);panneau3D.visible=true;dessinerPanneau();
+}
+function poserContreMur(ancre,point,normale){
+  const z=normale.clone();z.y=0;if(z.lengthSq()<1e-6)return;z.normalize();
+  const x=new THREE.Vector3().crossVectors(HAUT,z);
+  ancre.quaternion.setFromRotationMatrix(tmpM.makeBasis(x,HAUT,z));
+  ancre.position.set(point.x,Math.round(point.y*20)/20,point.z);ancre.visible=true;rafraichirUI();
+}
+function surSelection(ctrl){
+  tmpM.identity().extractRotation(ctrl.matrixWorld);
+  rc.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);rc.ray.direction.set(0,0,-1).applyMatrix4(tmpM);
+  if(panneau3D.visible){
+    const h=rc.intersectObject(panneau3D)[0];
+    if(h){const px=h.uv.x*1024,py=(1-h.uv.y)*1400, z=zones.find(z=>px>=z.x&&px<=z.x+z.w&&py>=z.y&&py<=z.y+z.h);if(z){z.a();appliquer()}return}
+  }
+  if(modeXR!=='ar')return;
+  const ancre=E.poser==='ui'?ancreUI:ancreGRP;
+  if(dernierHit)poserContreMur(ancre,dernierHit.point,dernierHit.normale);
+  else{                                // pas de mur détecté : pose à 1,5 m le long du rayon, face à soi
+    const p=rc.ray.at(1.5,new THREE.Vector3()), n=rc.ray.direction.clone().negate();poserContreMur(ancre,p,n);
+  }
+}
+for(let i=0;i<2;i++){
+  const c=renderer.xr.getController(i);
+  c.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(0,0,-3)]),new THREE.LineBasicMaterial({color:0x66ccff})));
+  c.addEventListener('select',()=>surSelection(c));c.addEventListener('squeeze',rappelerPanneau);
+  scene.add(c);manettes.push(c);
+}
+async function sourceDeHit(session){
+  try{
+    const s=[...session.inputSources].filter(s=>s.targetRayMode==='tracked-pointer');
+    const src=s.find(s=>s.handedness==='right')||s[0];
+    const space=src?src.targetRaySpace:await session.requestReferenceSpace('viewer');
+    sourceHit?.cancel?.();sourceHit=await session.requestHitTestSource({space});
+  }catch(e){sourceHit=null}
+}
+function placerVR(){
+  const d=CAT.decor;
+  ancreUI.position.fromArray(d.ui);ancreUI.quaternion.identity();ancreUI.visible=true;
+  ancreGRP.position.fromArray(d.groupe);ancreGRP.rotation.set(0,d.groupe_rotY,0);ancreGRP.visible=true;
+  if(E.dehors){const p=new THREE.Vector3(d.groupe[0]-.3,0,-d.mur_ep-2.6);monde.rotation.set(0,Math.PI,0);monde.position.set(p.x,0,p.z)}
+  else{monde.rotation.set(0,0,0);monde.position.set(0,0,-2.6)}
+  rafraichirUI();
+}
+async function demarrer(mode){
+  if(!navigator.xr){msg('WebXR indisponible dans ce navigateur (ouvrir la page en HTTPS dans le navigateur du Quest).');return}
+  let session;
+  try{
+    session=await navigator.xr.requestSession(mode==='ar'?'immersive-ar':'immersive-vr',
+      mode==='ar'?{requiredFeatures:['local-floor'],optionalFeatures:['hit-test','plane-detection']}:{optionalFeatures:['local-floor']});
+  }catch(e){msg('Session '+mode.toUpperCase()+' refusée : '+e.message);return}
+  modeXR=mode;renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session);
+  murApercu.visible=false;
+  if(mode==='ar'){
+    scene.background=null;monde.position.set(0,0,0);monde.rotation.set(0,0,0);ancreUI.visible=false;ancreGRP.visible=false;
+    sourceDeHit(session);session.addEventListener('inputsourceschange',()=>sourceDeHit(session));
+  }else{
+    if(!decor){decor=await charge(CAT.decor.fichier);monde.add(decor)}
+    decor.visible=true;scene.background=new THREE.Color(0xbfd6ee);placerVR();
+  }
+  setTimeout(rappelerPanneau,600);
+  session.addEventListener('end',()=>{modeXR=null;sourceHit=null;dernierHit=null;reticule.visible=false;panneau3D.visible=false;apercu();dimensionner();rafraichirUI()});
+}
+$('#btnAR').onclick=()=>demarrer('ar');$('#btnVR').onclick=()=>demarrer('vr');
+
+function dimensionner(){if(renderer.xr.isPresenting)return;const w=vue.clientWidth,h=vue.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}
+new ResizeObserver(dimensionner).observe(vue);dimensionner();
+const horloge=new THREE.Clock();
+renderer.setAnimationLoop((t,frame)=>{
+  const dt=horloge.getDelta();
+  if(CAT)animerCapots(dt);
+  if(frame&&modeXR==='ar'&&sourceHit){
+    const ref=renderer.xr.getReferenceSpace();dernierHit=null;
+    for(const r of frame.getHitTestResults(sourceHit)){
+      const pose=r.getPose(ref);if(!pose)continue;
+      const m=tmpM.fromArray(pose.transform.matrix), n=new THREE.Vector3().setFromMatrixColumn(m,1);
+      if(Math.abs(n.y)<.35){                      // plan vertical : un mur
+        dernierHit={point:new THREE.Vector3().setFromMatrixPosition(m),normale:n};
+        const z=n.clone().setY(0).normalize(), x=new THREE.Vector3().crossVectors(HAUT,z);
+        reticule.matrix.makeBasis(x,HAUT,z).setPosition(dernierHit.point);break;
+      }
+    }
+    reticule.visible=!!dernierHit;
+  }
+  renderer.render(scene,camera);
+});
+init().catch(e=>msg('Erreur de chargement : '+e.message));
+</script>
+</body>
+</html>
