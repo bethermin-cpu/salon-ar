@@ -267,6 +267,14 @@
   "P": 408,
   "recul": 100,
   "x_min": -487,
-  "x_max": 487
+  "x_max": 487,
+  "x_car_max": 395,
+  "degagements": {
+   "arriere": 100,
+   "batterie": 50,
+   "raccords": 350,
+   "avant": 350,
+   "obstacle_avant_h_max": 1200
+  }
  }
 }

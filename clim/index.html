@@ -98,11 +98,37 @@ function degagementsUI(m){          // manuel Perfera : 30 mm au plafond, 50 mm 
   g.add(boiteDegagement(.05,H,P,-L/2-.025,0,P/2,0x1e90ff),boiteDegagement(.05,H,P,L/2+.025,0,P/2,0x1e90ff));
   return g;
 }
-function degagementsGRP(c){         // manuel 4MXM : 100 mm derrière (déjà dans le support), 50 mm côté batterie, 350 mm côté raccords
+function degagementsGRP(c){         // manuel 4MXM p. 5 : 100 mm derrière (déjà dans le support), 50 mm côté batterie, 350 mm côté raccords,
+                                    // 350 mm devant le soufflage si un obstacle lui fait face (vert)
   const g=new THREE.Group(), H=c.H/1000,P=c.P/1000,r=c.recul/1000,x0=c.x_min/1000,x1=c.x_max/1000;
+  const d=c.degagements||{}, av=(d.avant||350)/1000, xc=(c.x_car_max??c.x_max)/1000;
   g.add(boiteDegagement(.05,H,P,x0-.025,H/2,r+P/2,0x1e90ff),boiteDegagement(.35,H,P,x1+.175,H/2,r+P/2,0xff8c00));
   g.add(boiteDegagement(x1-x0,H,r,(x0+x1)/2,H/2,r/2,0x1e90ff));
+  g.add(boiteDegagement(xc-x0,H,av,(x0+xc)/2,H/2,r+P+av/2,0x2ecc71));
   return g;
+}
+// veinage du Stylish bois noir : petite texture dessinée dans un canvas (les textures procédurales de Blender ne passent pas dans les GLB)
+let texBois=null;
+function textureBois(){
+  if(texBois)return texBois;
+  const c=document.createElement('canvas');c.width=512;c.height=256;const x=c.getContext('2d');
+  let s=7;const rnd=()=>(s=(s*16807)%2147483647)/2147483647;
+  x.fillStyle='#1d1612';x.fillRect(0,0,512,256);
+  for(let i=0;i<260;i++){
+    const y=rnd()*256, clair=rnd()<.45, a=.05+rnd()*.22, amp=.5+rnd()*2.5, ph=rnd()*6.28, f=1+Math.floor(rnd()*2);
+    x.strokeStyle=clair?`rgba(92,70,54,${a})`:`rgba(4,3,3,${a+.1})`;x.lineWidth=.6+rnd()*1.8;x.beginPath();
+    for(let u=0;u<=512;u+=16){const v=y+Math.sin(u/512*6.2832*f+ph)*amp;u?x.lineTo(u,v):x.moveTo(u,v)}   // f entier : raccord sans couture
+    x.stroke();
+  }
+  texBois=new THREE.CanvasTexture(c);texBois.colorSpace=THREE.SRGBColorSpace;
+  texBois.wrapS=texBois.wrapT=THREE.RepeatWrapping;texBois.anisotropy=8;
+  return texBois;
+}
+function uvFacade(mesh){            // UV planaires (maillage en mm) : u le long de l'unité, v sur la hauteur et le retour dessous
+  const g=mesh.geometry;if(g.attributes.uv)return;
+  const p=g.attributes.position, uv=new Float32Array(p.count*2);
+  for(let i=0;i<p.count;i++){uv[2*i]=p.getX(i)/520;uv[2*i+1]=(p.getY(i)-p.getZ(i))/260}
+  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));
 }
 async function init(){
   CAT=await (await fetch('catalogue.json')).json();
@@ -129,7 +155,13 @@ function appliquer(){
   unites[m.id].traverse(o=>{
     if(!o.isMesh)return;
     const n=o.material.name, r=/_facade$/.test(n)?v.facade:/_corps$/.test(n)?v.corps:null;
-    if(r){o.material.color.setRGB(...r.couleur);o.material.roughness=r.rugosite;o.material.metalness=r.metal}
+    if(r){
+      o.material.color.setRGB(...r.couleur);o.material.roughness=r.rugosite;o.material.metalness=r.metal;
+      const bois=v.id==='bois_noir'&&r===v.facade;
+      if(bois){uvFacade(o);o.material.color.setRGB(1,1,1)}
+      const map=bois?textureBois():null;
+      if(o.material.map!==map){o.material.map=map;o.material.needsUpdate=true}
+    }
   });
   for(const mm of CAT.modeles)for(const k in E.goulUI)pieces[mm.id].goul[k].forEach(o=>o.visible=E.goulUI[k]);
   for(const k in E.goulGRP)pieces.groupe.goul[k].forEach(o=>o.visible=E.goulGRP[k]);
@@ -174,7 +206,7 @@ function construirePanneauHTML(){
     for(const b of c.b){const e=document.createElement('button');e.textContent=b.l;if(b.on?.())e.classList.add('actif');if(!b.a)e.disabled=true;e.onclick=()=>{b.a?.();appliquer()};r.appendChild(e)}
   }
   const i=document.createElement('p');i.id='info';const m=modele();
-  i.textContent=`Daikin ${m.id} : ${m.H} × ${m.L} × ${m.P} mm (H × L × P). Groupe 4MXM68A9 : 734 × 974 × 408 mm, sur support mural.`;p.appendChild(i);
+  i.textContent=`Daikin ${m.id} : ${m.H} × ${m.L} × ${m.P} mm (H × L × P). Groupe 4MXM68A9 : 734 × 974 × 408 mm, sur support mural. Dégagements du groupe : 100 mm derrière, 50 mm côté batterie, 350 mm côté raccords (orange), 350 mm devant le soufflage si un obstacle lui fait face (vert, obstacle de 1,20 m de haut au plus).`;p.appendChild(i);
 }
 // panneau flottant (casque) : texture canvas, cliqué avec le rayon de la manette
 const cv=document.createElement('canvas');cv.width=1024;cv.height=1400;
@@ -199,13 +231,23 @@ function dessinerPanneau(){
     y+=92+22;
   }
   c.fillStyle='#9fb2c6';c.font='26px system-ui,sans-serif';c.textAlign='left';
-  c.fillText(modeXR==='ar'?'Gâchette sur un mur : poser. Poignée : rappeler ce panneau.':'Poignée : rappeler ce panneau devant soi.',36,1360);
+  c.fillText(modeXR==='ar'?(murVu?'Mur détecté (anneau vert) : gâchette pour poser dessus.':'Pas de mur détecté : la gâchette pose à 1,5 m devant la manette.'):'Poignée : rappeler ce panneau devant soi.',36,1322);
+  if(modeXR==='ar')c.fillText('Poignée : rappeler ce panneau. '+etatAR,36,1364);
   tex.needsUpdate=true;
 }
 function rafraichirUI(){if(!CAT)return;if(renderer.xr.isPresenting)dessinerPanneau();else construirePanneauHTML()}
 
 // ---- XR
-let modeXR=null, sourceHit=null, reticule, manettes=[];
+let modeXR=null, sourceHit=null, reticule, manettes=[], murVu=false, etatAR='';
+function poserDevantSoi(){            // AR : les deux objets apparaissent tout de suite, à 1,6 m devant soi, avant toute pose sur un mur
+  const cam=renderer.xr.getCamera(), p=new THREE.Vector3(), d=new THREE.Vector3();
+  cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;if(d.lengthSq()<1e-6)d.set(0,0,-1);d.normalize();
+  const cote=new THREE.Vector3().crossVectors(d,HAUT), n=d.clone().negate();
+  const garde=E.poser;
+  poserContreMur(ancreUI,p.clone().addScaledVector(d,1.6).addScaledVector(cote,-.7).setY(1.9),n);
+  poserContreMur(ancreGRP,p.clone().addScaledVector(d,1.6).addScaledVector(cote,.8).setY(.6),n);
+  E.poser=garde;
+}
 reticule=new THREE.Mesh(new THREE.RingGeometry(.05,.065,32),new THREE.MeshBasicMaterial({color:0x00c853,side:THREE.DoubleSide}));
 reticule.matrixAutoUpdate=false;reticule.visible=false;scene.add(reticule);
 const rc=new THREE.Raycaster(), tmpM=new THREE.Matrix4(), HAUT=new THREE.Vector3(0,1,0);
@@ -247,8 +289,9 @@ async function sourceDeHit(session){
     const s=[...session.inputSources].filter(s=>s.targetRayMode==='tracked-pointer');
     const src=s.find(s=>s.handedness==='right')||s[0];
     const space=src?src.targetRaySpace:await session.requestReferenceSpace('viewer');
-    sourceHit?.cancel?.();sourceHit=await session.requestHitTestSource({space});
-  }catch(e){sourceHit=null}
+    sourceHit?.cancel?.();sourceHit=await session.requestHitTestSource({space});etatAR='';
+  }catch(e){sourceHit=null;etatAR='(détection des murs indisponible)'}
+  if(renderer.xr.isPresenting)dessinerPanneau();
 }
 function placerVR(){
   const d=CAT.decor;
@@ -260,15 +303,20 @@ function placerVR(){
 }
 async function demarrer(mode){
   if(!navigator.xr){msg('WebXR indisponible dans ce navigateur (ouvrir la page en HTTPS dans le navigateur du Quest).');return}
+  if(mode==='ar'&&!(await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false))){msg('Réalité augmentée non proposée par ce navigateur (il faut le navigateur du Quest, page en HTTPS).');return}
   let session;
-  try{
-    session=await navigator.xr.requestSession(mode==='ar'?'immersive-ar':'immersive-vr',
-      mode==='ar'?{requiredFeatures:['local-floor'],optionalFeatures:['hit-test','plane-detection']}:{optionalFeatures:['local-floor']});
+  const type=mode==='ar'?'immersive-ar':'immersive-vr';
+  try{                                  // 1er essai : avec la détection des murs ; 2e essai : sans rien d'optionnel
+    try{session=await navigator.xr.requestSession(type,mode==='ar'?{requiredFeatures:['local-floor'],optionalFeatures:['hit-test']}:{optionalFeatures:['local-floor']})}
+    catch(e1){session=await navigator.xr.requestSession(type,{optionalFeatures:['local-floor']})}
   }catch(e){msg('Session '+mode.toUpperCase()+' refusée : '+e.message);return}
-  modeXR=mode;renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session);
+  modeXR=mode;
+  try{renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(session)}
+  catch(e){try{renderer.xr.setReferenceSpaceType('local');await renderer.xr.setSession(session)}catch(e2){msg('Démarrage '+mode.toUpperCase()+' impossible : '+e2.message);modeXR=null;session.end();return}}
   murApercu.visible=false;
   if(mode==='ar'){
-    scene.background=null;monde.position.set(0,0,0);monde.rotation.set(0,0,0);ancreUI.visible=false;ancreGRP.visible=false;
+    scene.background=null;renderer.setClearColor(0x000000,0);monde.position.set(0,0,0);monde.rotation.set(0,0,0);
+    setTimeout(poserDevantSoi,500);
     sourceDeHit(session);session.addEventListener('inputsourceschange',()=>sourceDeHit(session));
   }else{
     if(!decor){decor=await charge(CAT.decor.fichier);monde.add(decor)}
@@ -297,6 +345,7 @@ renderer.setAnimationLoop((t,frame)=>{
       }
     }
     reticule.visible=!!dernierHit;
+    if(murVu!==!!dernierHit){murVu=!!dernierHit;dessinerPanneau()}
   }
   renderer.render(scene,camera);
 });
